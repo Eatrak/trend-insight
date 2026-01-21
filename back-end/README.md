@@ -171,12 +171,14 @@ Watermarking:
 
 * 10 minutes (configurable)
 
-Windowing:
 
-* Sliding windows (e.g. 15 min window, 5 min slide)
-* Tumbling windows for reporting
-
-Checkpointing is mandatory for fault tolerance.
+- **Adaptive Windowing Strategy**:
+  To handle varying data sparsity, the system concurrently calculates metrics over three window types:
+  1.  **Short (30m window, 15m slide)**: Optimized for high-volume, viral topics.
+  2.  **Medium (60m window, 30m slide)**: Balanced for standard queries.
+  3.  **Long (120m window, 60m slide)**: Optimized for low-volume/sparse topics to ensure velocity metrics are capturable.
+  
+  All metrics are output with a `window_type` tag (`30m`, `60m`, `120m`).
 
 ---
 
