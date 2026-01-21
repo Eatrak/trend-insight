@@ -1,249 +1,350 @@
-# Reddit Insight – Backend
+# Reddit Insight – Complete Backend Technical Specification
 
-## Part I: Functional Requirements
+## Document Purpose
 
-### 1. Purpose of the System
+This document is a **complete, implementation-grade technical specification** for the Reddit Insight backend system.
 
-Reddit Insight is a backend-heavy data processing system designed to ingest, process, and analyze high‑volume, fast‑changing Reddit data in near real time. The system focuses on **topic tracking**, **trend detection**, and **sentiment/statistical analysis** without relying on LLMs at runtime.
+The document is suitable for:
 
-The backend is explicitly designed to **justify and require Apache Kafka and Apache Spark**, both from an architectural and data‑volume perspective.
+* full backend implementation
+* academic evaluation (TAP / distributed systems)
+* architectural justification of Kafka + Spark
 
-### 2. Core Functional Features
-
-The system provides value through two main mechanisms: *user-defined topic insights* and *automatic detection of globally viral topics*.
-
-#### 2.1 Topic Management (User-Defined)
-
-**Description**
-Users define topics to track using a **natural language description**. The backend converts this description into a structured tracking configuration.
-
-**Topic Configuration Includes**
-* Topic ID
-* Description (free text)
-* Keywords list
-* Subreddits list
-* Filters (score, time window, post type)
-* Update frequency
-* Activation status
-
-**Backend Responsibilities**
-* Store user-defined topics
-* Maintain topic configuration metadata
-* Associate topics with tracking rules
-
-*Note: Topic expansion (keyword/subreddit inference) may use AI offline or rule‑based logic, but runtime tracking is deterministic.*
-
-#### 2.2 Global Viral Topic Detection (Automatic)
-
-**Description**
-The system continuously detects the **top 3 viral topics** across all ingested Reddit data, independently of any user-defined topics. This ensures the system delivers immediate insight value without requiring user configuration.
-
-A viral topic is defined as a term or keyword cluster that shows a statistically significant increase in activity compared to its historical baseline.
-
-**Backend Responsibilities**
-* Continuously monitor all incoming Reddit events
-* Rank topics by growth velocity
-* Persist the current Top 3 viral topics
+This specification intentionally avoids runtime LLM dependency for analytics logic.
 
 ---
 
-## Part II: Technical Architecture & Processing
+## Part I – Functional Requirements
 
-### 1. Introduction
+### 1. Purpose of the System
 
-This section provides a **technical, implementation-level explanation** of how RedditInsight works internally. It explains how data flows through the system, how Apache Kafka and Apache Spark are used, and how precise topic metrics are computed **without relying on LLMs**.
+Reddit Insight is a backend-heavy, near–real-time data processing platform designed to ingest, process, and analyze **high-volume, fast-changing Reddit data**.
 
-The document is intended for:
-* academic evaluation (TAP project)
-* backend implementation guidance
-* architectural justification
+The system focuses on:
 
-### 2. System Overview
+* topic tracking
+* trend detection
+* statistical and sentiment analysis
 
-RedditInsight is a **real-time data analytics platform** designed to process large volumes of Reddit activity and extract statistically meaningful insights.
+All core intelligence is **deterministic and statistical**, not AI-driven at runtime.
 
-Core principles:
-* Event-driven architecture
-* Stream-first processing
-* Deterministic analytics
-* Horizontal scalability
+Apache Kafka and Apache Spark are **mandatory architectural components**, justified by:
 
-The system produces two main outputs:
-1. **User-defined topic analytics**
-2. **Global viral topic detection (Top 3)**
+* high ingestion rate
+* stream processing requirements
+* stateful windowed analytics
+* horizontal scalability
 
-### 3. Data Model
+---
 
-#### 3.1 Event Definition
-Each Reddit post or comment is modeled as an immutable event.
+### 2. Core Functional Features
 
-Core event fields:
-* `event_id`
-* `type` (post | comment)
-* `subreddit`
-* `author`
-* `created_utc`
-* `score`
-* `text`
+The system delivers value via **two independent insight mechanisms**.
 
-Events are never mutated once ingested.
+#### 2.1 User-Defined Topic Insights
 
-### 4. Data Ingestion Layer (Kafka)
+Users define topics using **natural language descriptions**. These descriptions are converted (offline or asynchronously) into a structured topic configuration used by Spark.
 
-#### 4.1 Ingestion Strategy
-Because Reddit does not provide push-based streaming APIs, ingestion is performed via **high-frequency polling**.
+**Topic Configuration Model**
+
+* topic_id (UUID)
+* description (free text)
+* keyword_groups (array of arrays)
+* allowed_subreddits (array)
+* filters:
+
+  * minimum score
+  * event type (post/comment)
+  * time windows
+* update frequency
+* activation status
+
+**Backend Responsibilities**
+
+* persist topic definitions
+* version topic configurations
+* distribute topic rules to Spark jobs
+
+Runtime topic tracking is strictly **rule-based and deterministic**.
+
+---
+
+#### 2.2 Global Viral Topic Detection
+
+The system continuously detects the **Top 3 viral topics globally**, regardless of user configuration.
+
+A viral topic is defined as a **keyword or n-gram cluster** exhibiting statistically abnormal growth relative to its own historical baseline.
+
+This feature guarantees system usefulness even with zero user-defined topics.
+
+---
+
+## Part II – System Architecture
+
+### 3. High-Level Architecture
+
+Reddit Insight follows an **event-driven, stream-first architecture**.
+
+Core components:
+
+1. Reddit ingestion service
+2. Kafka event backbone
+3. Spark Structured Streaming jobs
+4. Metrics storage layer
+5. REST API service
+6. Optional local LLM enrichment layer
+
+All components are **loosely coupled** and independently scalable.
+
+---
+
+### 4. Data Model
+
+#### 4.1 Event Definition
+
+Each Reddit post or comment is modeled as an **immutable event**.
+
+```json
+{
+  "event_id": "uuid",
+  "event_type": "post | comment",
+  "subreddit": "string",
+  "author": "string | null",
+  "created_utc": "timestamp",
+  "text": "string",
+  "score": "int",
+  "num_comments": "int | null",
+  "ingested_at": "timestamp"
+}
+```
+
+Events are append-only and never mutated after ingestion.
+
+---
+
+## Part III – Ingestion Layer (Kafka)
+
+### 5. Ingestion Strategy
+
+Reddit does not provide push-based streaming APIs. Therefore, ingestion is performed via **high-frequency polling**.
 
 The ingestion service:
-* periodically queries Reddit APIs
-* normalizes responses
-* publishes each post/comment as a Kafka message
 
-#### 4.2 Kafka Topics
+* polls Reddit APIs on fixed intervals
+* normalizes responses into event schema
+* publishes events to Kafka
 
-| Topic                  | Purpose                    |
-| ---------------------- | -------------------------- |
-| `reddit.posts.raw`     | Raw post events            |
-| `reddit.comments.raw`  | Raw comment events         |
-| `reddit.topic.matched` | Events matched to topics   |
-| `reddit.global.trends` | Global viral topic metrics |
+Deduplication is handled using event_id hashing.
 
-Kafka acts as a **durable event log**, enabling replay and decoupled processing.
+---
 
-### 5. Stream Processing Layer (Apache Spark)
+### 6. Kafka Topics
 
-Spark Structured Streaming consumes events from Kafka and performs **stateful, window-based analytics**.
+| Topic                   | Purpose                       |
+| ----------------------- | ----------------------------- |
+| reddit.raw.posts        | raw post events               |
+| reddit.raw.comments     | raw comment events            |
+| reddit.processed.events | normalized unified stream     |
+| reddit.topic.matched    | events matched to user topics |
+| reddit.global.trends    | global viral topic metrics    |
 
-#### 5.1 Text Preprocessing
-Each event text undergoes deterministic preprocessing:
-* lowercasing
+Kafka serves as:
+
+* durable event log
+* replay mechanism
+* backpressure buffer
+
+ZooKeeper is **not required** in modern Kafka deployments.
+
+---
+
+## Part IV – Stream Processing (Apache Spark)
+
+### 7. Spark Processing Model
+
+* Spark Structured Streaming
+* Micro-batch execution
+* Kafka as source and sink
+* Event-time processing
+
+Watermarking:
+
+* 10 minutes (configurable)
+
+Windowing:
+
+* Sliding windows (e.g. 15 min window, 5 min slide)
+* Tumbling windows for reporting
+
+Checkpointing is mandatory for fault tolerance.
+
+---
+
+### 8. Text Preprocessing
+
+All text processing is deterministic:
+
+* lowercase
 * punctuation removal
 * tokenization
 * optional stopword filtering
 
-No semantic inference is performed.
+No embeddings, transformers, or semantic inference.
 
-#### 5.2 Topic Matching (User-Defined Topics)
-Each user-defined topic contains:
-* keyword sets
-* allowed subreddits
-* score thresholds
+---
 
-Spark performs:
-* keyword or n-gram matching
-* contextual filtering by subreddit
-* assignment of `topic_id` to events
+### 9. Topic Matching Logic
 
-Matched events are emitted to `reddit.topic.matched`.
+Topic matching is **rule-based**.
 
-#### 5.3 Windowed Aggregations
-Spark maintains **sliding and tumbling windows** for each topic.
+A topic matches an event if:
 
-Computed metrics:
-* mention count
-* engagement-weighted count
-* subreddit distribution
-* temporal velocity
+* event.subreddit ∈ allowed_subreddits
+* event.score ≥ threshold
+* at least N keywords from the same keyword_group appear
+* OR a configured n-gram is detected
 
-Velocity is computed as:
-`velocity = short_window_count / long_window_average`
+This avoids single-word ambiguity.
 
-This allows detection of abnormal increases in activity.
+---
 
-#### 5.4 Trend Detection Logic
-A topic is considered trending if:
-* velocity exceeds a configurable threshold
-* activity persists across multiple windows
+### 10. Metrics Computation
 
-This logic is purely statistical and deterministic.
+Spark computes metrics per topic and per window.
 
-#### 5.5 Global Viral Topic Detection
-Spark continuously analyzes **all incoming events**, independent of user topics.
+Mandatory metrics:
 
-Process:
-1. extract candidate tokens and n-grams
+**Mentions**
+
+* count of matching events
+
+**Engagement**
+
+```
+engagement = sum(score + num_comments)
+```
+
+**Velocity**
+
+```
+velocity = (current_window_mentions - previous_window_mentions) / window_duration
+```
+
+**Acceleration**
+
+```
+acceleration = velocity_current - velocity_previous
+```
+
+**Trend Score**
+
+```
+trend_score = w1 * velocity + w2 * acceleration + w3 * engagement
+```
+
+Weights (example default):
+
+* w1 = 0.5
+* w2 = 0.3
+* w3 = 0.2
+
+Weights must be configurable.
+
+---
+
+### 11. Global Viral Topic Detection
+
+Spark independently processes all events:
+
+1. extract candidate n-grams (2–4 words)
 2. aggregate frequencies over short and long windows
-3. compute growth deltas
-4. rank candidates by velocity
-5. select top 3
+3. compute velocity and acceleration
+4. rank by trend_score
+5. select top 3 per window
 
-This ensures system value without user configuration.
+Results are persisted regardless of user activity.
 
-#### 5.6 Sentiment Analysis (Optional, Non-AI)
-Sentiment scoring uses **lexicon-based methods** (e.g. VADER):
+---
+
+### 12. Sentiment Analysis (Optional)
+
+Sentiment uses lexicon-based methods (e.g. VADER):
+
 * deterministic
 * explainable
-* lightweight
+* low-cost
 
-Sentiment trends are aggregated per topic over time.
+Sentiment trends are aggregated, not stored per event.
 
-### 6. Storage Layer
+---
 
-#### 6.1 Raw Data Storage
-Raw Kafka data may be persisted to object storage for:
-* debugging
-* replay
-* offline experiments
+## Part V – Storage Layer
 
-#### 6.2 Processed Metrics Storage
-Aggregated metrics are stored in:
-* relational DB or
-* time-series database
+### 13. Storage Strategy
 
-Spark writes only **final aggregates**, never raw text.
+**Raw Events**
 
-### 7. Backend API Layer
+* Optional object storage (S3-compatible)
+* Used for replay and debugging
 
-The backend exposes read-only APIs:
+**Aggregated Metrics**
 
-#### 7.1 Topic APIs
-* create/update/delete topic definitions
+* Relational DB or time-series DB
+* Indexed by topic_id + timestamp
 
-#### 7.2 Analytics APIs
-* retrieve metrics
-* retrieve trends
-* retrieve sentiment summaries
-* retrieve global viral topics
+Spark never writes raw text to the database.
 
-All APIs serve **precomputed results only**.
+---
 
-### 8. Fault Tolerance & Scalability
+## Part VI – API Layer
 
-#### Kafka
-* partitioned topics
-* durable logs
-* replay support
+### 14. REST API
 
-#### Spark
-* checkpointing
-* exactly-once processing
-* horizontal scaling
+APIs are strictly **read-only for analytics**.
 
-No centralized coordinator (e.g. ZooKeeper) is used.
+Mandatory endpoints:
 
-### 9. Optional Local LLM Layer (Out of Core System)
+* POST /topics
+* GET /topics/{id}
+* GET /topics/{id}/report
+* GET /trending/global
 
-A local LLM may optionally consume Spark outputs to:
-* generate summaries
-* explain trends
+All responses serve **precomputed data only**.
+
+---
+
+## Part VII – Optional Local LLM Layer
+
+### 15. LLM Usage Constraints
+
+A local LLM may consume Spark outputs to:
+
+* generate explanations
+* summarize trends
 * compare topics
 
-The LLM never accesses raw data or streaming logic.
+The LLM:
 
-### 10. Why the System Is Precise Without AI
+* never accesses raw streams
+* never influences rankings or metrics
 
-Precision arises from:
-* contextual constraints
-* multi-word patterns
-* temporal deltas
-* statistical filtering
+---
 
-The system detects **changes in behavior**, not word meanings.
+## Part VIII – Non-Functional Requirements
 
-### 11. Conclusion
+* Horizontal scalability
+* Fault tolerance
+* Configurable via environment variables
+* Modular codebase
+* Extensive inline documentation
 
-RedditInsight is a fully stream-based analytics platform where:
-* Kafka handles ingestion and buffering
-* Spark performs deterministic intelligence
-* insights emerge from temporal statistics
+---
 
-The architecture is scalable, explainable, and academically defensible.
+## Part IX – Design Justification
+
+The system is precise without AI because it:
+
+* measures behavioral change
+* uses multi-word constraints
+* applies temporal statistics
+* filters noise through windows and baselines
