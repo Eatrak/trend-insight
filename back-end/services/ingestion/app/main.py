@@ -96,8 +96,11 @@ def poll_loop() -> None:
     last_seen_posts: set[str] = set()
     last_seen_comments: set[str] = set()
 
-    posts_url = f"https://www.reddit.com/r/{SUBREDDITS}/new.json"
-    comments_url = f"https://www.reddit.com/r/{SUBREDDITS}/comments.json"
+    # Sanitized Subreddits: Ensure '+' separator for multi-reddit URL
+    safe_subreddits = SUBREDDITS.replace(",", "+")
+    
+    posts_url = f"https://www.reddit.com/r/{safe_subreddits}/new.json"
+    comments_url = f"https://www.reddit.com/r/{safe_subreddits}/comments.json"
 
     while True:
         try:
