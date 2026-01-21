@@ -46,20 +46,30 @@ def reddit_get_json(url: str, params: dict[str, Any]) -> dict[str, Any]:
     return r.json()
 
 
+
+def get_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
 def extract_post(child: dict[str, Any]) -> Optional[dict[str, Any]]:
     d = child.get("data") or {}
     if not d.get("id"):
         return None
+    
+    # Strict Schema from README
     return {
-        "id": d.get("name") or d.get("id"),
+        "event_id": d.get("name") or d.get("id"),
+        "event_type": "post",
         "subreddit": d.get("subreddit") or "",
-        "author": d.get("author") or "",
+        "author": d.get("author") or None,
         "created_utc": utc_iso(float(d.get("created_utc") or time.time())),
-        "score": int(d.get("score") or 0),
         "text": (d.get("title") or "") + "\n" + (d.get("selftext") or ""),
-        "type": "post",
-        "permalink": d.get("permalink") or "",
-        "url": d.get("url") or "",
+        "score": int(d.get("score") or 0),
+        "num_comments": int(d.get("num_comments") or 0),
+        "ingested_at": get_now_iso(),
+        # Internal fields for debugging only, not strictly required by schema but useful
+        # "permalink": d.get("permalink") or "",
+        # "url": d.get("url") or "",
     }
 
 
@@ -67,16 +77,17 @@ def extract_comment(child: dict[str, Any]) -> Optional[dict[str, Any]]:
     d = child.get("data") or {}
     if not d.get("id"):
         return None
+        
     return {
-        "id": d.get("name") or d.get("id"),
+        "event_id": d.get("name") or d.get("id"),
+        "event_type": "comment",
         "subreddit": d.get("subreddit") or "",
-        "author": d.get("author") or "",
+        "author": d.get("author") or None,
         "created_utc": utc_iso(float(d.get("created_utc") or time.time())),
-        "score": int(d.get("score") or 0),
         "text": d.get("body") or "",
-        "type": "comment",
-        "permalink": d.get("permalink") or "",
-        "link_id": d.get("link_id") or "",
+        "score": int(d.get("score") or 0),
+        "num_comments": 0, # Logic: Comments are leaves in this polling model
+        "ingested_at": get_now_iso(),
     }
 
 
@@ -95,10 +106,10 @@ def poll_loop() -> None:
                 msg = extract_post(child)
                 if not msg:
                     continue
-                if msg["id"] in last_seen_posts:
+                if msg["event_id"] in last_seen_posts:
                     continue
-                producer.send("reddit.posts.raw", key=msg["id"], value=msg)
-                last_seen_posts.add(msg["id"])
+                producer.send("reddit.raw.posts", key=msg["event_id"], value=msg)
+                last_seen_posts.add(msg["event_id"])
             # cap memory
             if len(last_seen_posts) > 5000:
                 last_seen_posts = set(list(last_seen_posts)[-2000:])
@@ -108,10 +119,10 @@ def poll_loop() -> None:
                 msg = extract_comment(child)
                 if not msg:
                     continue
-                if msg["id"] in last_seen_comments:
+                if msg["event_id"] in last_seen_comments:
                     continue
-                producer.send("reddit.comments.raw", key=msg["id"], value=msg)
-                last_seen_comments.add(msg["id"])
+                producer.send("reddit.raw.comments", key=msg["event_id"], value=msg)
+                last_seen_comments.add(msg["event_id"])
             if len(last_seen_comments) > 5000:
                 last_seen_comments = set(list(last_seen_comments)[-2000:])
 

@@ -110,6 +110,20 @@ services:
         /opt/spark-apps/jobs/reddit_streaming.py
     restart: unless-stopped
 
+  ingestion:
+    build:
+      context: ./services/ingestion
+    container_name: reddit-ingestion
+    depends_on:
+      - kafka
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - REDDIT_SUBREDDITS=technology,programming,python,artificial,machinelearning,askscience,worldnews
+      - REDDIT_POLL_INTERVAL_SECONDS=10
+      - REDDIT_LIMIT=100
+    restart: unless-stopped
+
+
   api:
     build:
       context: ./services/api
