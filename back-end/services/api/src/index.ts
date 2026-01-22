@@ -138,19 +138,99 @@ app.get('/topics/:id/report', async (req: Request, res: Response) => {
             ]
           }
         },
-        sort: [{ timestamp: { order: 'desc' } }],
+        sort: [{ end: { order: 'desc' } }],
         size: 100 // Pagination could be added
       }
     });
 
     const hits = result.hits.hits.map(h => h._source);
-    res.json({ topic_id: topicId, metrics: hits });
+    
+    // --- Metric Enrichment (Compute-on-Read) ---
+    // Spark outputs raw 'mentions' and 'engagement'. We calculate Velocity/Acceleration here.
+    const enriched = enrichMetrics(hits);
+    
+    // Sort descending by end time for the report
+    enriched.sort((a, b) => new Date(b.end).getTime() - new Date(a.end).getTime());
+
+    res.json({ topic_id: topicId, metrics: enriched });
   } catch (error: any) {
      console.error("ES Error:", error);
     // If index doesn't exist yet, return empty
     res.json({ topic_id: req.params.id, metrics: [] });
   }
 });
+
+// Helper: Compute Velocity & Acceleration
+function enrichMetrics(rawDocs: any[]) {
+    // 1. Group by window_type (30m, 60m, 120m)
+    const groups: Record<string, any[]> = {};
+    rawDocs.forEach(d => {
+        const type = d.window_type || '60m';
+        if (!groups[type]) groups[type] = [];
+        groups[type].push(d);
+    });
+
+    const output: any[] = [];
+    const W1 = parseFloat(process.env.WEIGHT_VELOCITY || "0.5");
+    const W2 = parseFloat(process.env.WEIGHT_ACCELERATION || "0.3");
+    const W3 = parseFloat(process.env.WEIGHT_ENGAGEMENT || "0.2");
+
+    // Duration map in hours
+    const durationMap: Record<string, number> = {
+        "30m": 0.5,
+        "60m": 1.0, 
+        "120m": 2.0
+    };
+
+    // 2. Process each group
+    for (const type of Object.keys(groups)) {
+        // Sort by start time ASC to find previous window
+        const docs = groups[type].sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
+        const durationHrs = durationMap[type] || 1.0;
+        
+        // We need to map start_time -> doc to find strict previous window
+        // But for simplicity/robustness, we can just use the immediately preceding record 
+        // IF the gap matches the slide. Spark slide is: 30m->15m slide, 60m->30m slide, 120m->60m slide.
+        // Let's rely on sorting. 
+        
+        for (let i = 0; i < docs.length; i++) {
+            const curr = docs[i];
+            const prev = docs[i-1]; // Simple predecessor check
+            
+            let velocity = 0;
+            let acceleration = 0;
+            
+            // Check if prev is valid predecessor (contiguous or sliding overlap)
+            // For now, simple diff with previous available record in strict time order
+             if (prev) {
+                 const m_curr = curr.mentions || 0;
+                 const m_prev = prev.mentions || 0;
+                 velocity = (m_curr - m_prev) / durationHrs;
+                 
+                 // For acceleration, we need prev_velocity. 
+                 // We can look at the ALREADY calculated prev record in 'output' 
+                 // but 'prev' here is the raw doc. We need to store computed state.
+                 // Let's attach computed metrics to the doc object temporarily.
+                 const v_prev_val = (prev as any)._computed_velocity || 0;
+                 acceleration = velocity - v_prev_val;
+             }
+             
+             (curr as any)._computed_velocity = velocity;
+             
+             const trend_score = (W1 * velocity) + (W2 * acceleration) + (W3 * (curr.engagement || 0));
+             
+             output.push({
+                 ...curr,
+                 velocity,
+                 acceleration,
+                 trend_score,
+                 _computed_velocity: undefined // clean up
+             });
+        }
+    }
+    
+    return output;
+}
 
 // 5. GET /trending/global
 // Reads global trends from Elasticsearch (reddit-global-trends*)

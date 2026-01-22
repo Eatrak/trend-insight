@@ -96,38 +96,82 @@ def poll_loop() -> None:
     last_seen_posts: set[str] = set()
     last_seen_comments: set[str] = set()
 
-    # Sanitized Subreddits: Ensure '+' separator for multi-reddit URL
+    # Sanitized Subreddits
     safe_subreddits = SUBREDDITS.replace(",", "+")
-    
     posts_url = f"https://www.reddit.com/r/{safe_subreddits}/new.json"
     comments_url = f"https://www.reddit.com/r/{safe_subreddits}/comments.json"
 
+    # --- Backfill Logic ---
+    print("[ingestion] Starting 24h backfill...")
+    backfill_limit = 1000 # Approx 24h for busy subs, more for quiet ones
+    after: Optional[str] = None
+    fetched_count = 0
+    
+    while fetched_count < backfill_limit:
+        try:
+            params = {"limit": 100} # Max allowed by Reddit
+            if after:
+                params["after"] = after
+            
+            print(f"[ingestion] Backfill fetch offset={fetched_count} after={after}")
+            data = reddit_get_json(posts_url, params)
+            children = (data.get("data") or {}).get("children") or []
+            
+            if not children:
+                print("[ingestion] Backfill done (no more data).")
+                break
+
+            for child in children:
+                msg = extract_post(child)
+                if not msg: continue
+                # dedupe
+                if msg["event_id"] in last_seen_posts: continue
+                
+                producer.send("reddit.raw.posts", key=msg["event_id"], value=msg)
+                last_seen_posts.add(msg["event_id"])
+                
+                # Update after token
+                after = child["data"]["name"] # 't3_xxxxx'
+            
+            fetched_count += len(children)
+            producer.flush()
+            time.sleep(2) # be nice during backfill
+
+        except Exception as e:
+            print(f"[ingestion] Backfill error: {e}")
+            break
+            
+    print(f"[ingestion] Backfill complete. Fetched {fetched_count} posts. Switching to poll loop.")
+
+    # --- Main Poll Loop ---
     while True:
         try:
+            # Poll Posts
             posts = reddit_get_json(posts_url, {"limit": LIMIT})
             for child in (posts.get("data") or {}).get("children") or []:
                 msg = extract_post(child)
-                if not msg:
-                    continue
-                if msg["event_id"] in last_seen_posts:
-                    continue
+                if not msg: continue
+                if msg["event_id"] in last_seen_posts: continue
+                
                 producer.send("reddit.raw.posts", key=msg["event_id"], value=msg)
                 last_seen_posts.add(msg["event_id"])
-            # cap memory
-            if len(last_seen_posts) > 5000:
-                last_seen_posts = set(list(last_seen_posts)[-2000:])
+            
+            # Simple cap
+            if len(last_seen_posts) > 10000:
+                last_seen_posts = set(list(last_seen_posts)[-5000:])
 
+            # Poll Comments (Backfill not strictly needed for comments as velocity relies mainly on post counts for now)
             comments = reddit_get_json(comments_url, {"limit": LIMIT})
             for child in (comments.get("data") or {}).get("children") or []:
                 msg = extract_comment(child)
-                if not msg:
-                    continue
-                if msg["event_id"] in last_seen_comments:
-                    continue
+                if not msg: continue
+                if msg["event_id"] in last_seen_comments: continue
+                
                 producer.send("reddit.raw.comments", key=msg["event_id"], value=msg)
                 last_seen_comments.add(msg["event_id"])
-            if len(last_seen_comments) > 5000:
-                last_seen_comments = set(list(last_seen_comments)[-2000:])
+            
+            if len(last_seen_comments) > 10000:
+                last_seen_comments = set(list(last_seen_comments)[-5000:])
 
             producer.flush(timeout=10)
         except Exception as e:  # noqa: BLE001

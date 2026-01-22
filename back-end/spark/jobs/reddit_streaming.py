@@ -2,6 +2,7 @@ import json
 import os
 import re
 import sqlite3
+import sys
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -29,7 +30,7 @@ W2 = float(os.getenv("WEIGHT_ACCELERATION", "0.3"))
 W3 = float(os.getenv("WEIGHT_ENGAGEMENT", "0.2"))
 
 # Watermark
-WATERMARK_DURATION = "10 minutes"
+WATERMARK_DURATION = "24 hours"
 
 
 # -----------------------------------------------------------------------------
@@ -66,7 +67,8 @@ def load_topics() -> List[Dict[str, Any]]:
     conn.row_factory = sqlite3.Row
     try:
         rows = conn.execute("SELECT * FROM topics WHERE is_active = 1").fetchall()
-    except Exception:
+    except Exception as e:
+        sys.stderr.write(f"ERROR: load_topics failed: {e}\n")
         return []
     finally:
         conn.close()
@@ -137,67 +139,14 @@ def compute_windowed_metrics(
             "mentions",
             "engagement"
         )
-    )
-
-    # 2. Velocity (Current vs Previous)
-    # Join on: Prev.start = Curr.start - Slide
-    curr = aggs.withColumnRenamed("mentions", "m_curr").withColumnRenamed("engagement", "e_curr")
-    prev = aggs.withColumnRenamed("mentions", "m_prev").withColumnRenamed("engagement", "e_prev").withColumnRenamed(group_col, "grp_prev").withColumnRenamed("start", "s_prev")
-
-    # Dynamic Interval string for Join
-    interval_expr = f"INTERVAL {slide_duration}"
-
-    velocity_df = (
-        curr.join(
-            prev,
-            (curr[group_col] == prev.grp_prev) & 
-            (prev.s_prev == (curr.start - F.expr(interval_expr))),
-            "left_outer"
-        )
-        .select(
-            curr[group_col],
-            curr.start,
-            curr.end,
-            F.coalesce(curr.m_curr, F.lit(0)).alias("mentions"),
-            F.coalesce(curr.e_curr, F.lit(0)).alias("engagement"),
-            # Velocity = (Curr - Prev) / Duration
-            (
-                (F.coalesce(curr.m_curr, F.lit(0)) - F.coalesce(prev.m_prev, F.lit(0))) 
-                / duration_hrs
-            ).alias("velocity")
-        )
-    )
-
-    # 3. Acceleration (Curr Velocity vs Prev Velocity)
-    v_curr = velocity_df.withColumnRenamed("velocity", "v_curr")
-    v_prev = velocity_df.withColumnRenamed("velocity", "v_prev").withColumnRenamed("mentions", "m_prev").withColumnRenamed("engagement", "e_prev").withColumnRenamed(group_col, "g_prev").withColumnRenamed("start", "st_prev")
-
-    accel_df = (
-        v_curr.join(
-            v_prev,
-            (v_curr[group_col] == v_prev.g_prev) &
-            (v_prev.st_prev == (v_curr.start - F.expr(interval_expr))),
-            "left_outer"
-        )
-        .select(
-            v_curr[group_col],
-            v_curr.end.alias("timestamp"),
-            v_curr.mentions,
-            v_curr.engagement,
-            v_curr.v_curr.alias("velocity"),
-            # Acceleration = V_curr - V_prev
-            (v_curr.v_curr - F.coalesce(v_prev.v_prev, F.lit(0.0))).alias("acceleration")
-        )
-        .withColumn(
-            "trend_score",
-            (F.lit(W1) * F.col("velocity")) + 
-            (F.lit(W2) * F.col("acceleration")) + 
-            (F.lit(W3) * F.col("engagement"))
-        )
         .withColumn("window_type", F.lit(window_label))
+        # Add placeholders for velocity/acceleration/trend_score so the schema remains compatible if needed, 
+        # or we update schema. Let's update schema in next steps, but for now 
+        # let's just output raw metrics.
+        # Actually, let's keep the schema simple and do calculation in API.
     )
     
-    return accel_df
+    return aggs
 
 
 # -----------------------------------------------------------------------------
@@ -230,15 +179,22 @@ def main() -> None:
         spark.readStream.format("kafka")
         .option("kafka.bootstrap.servers", KAFKA_BOOTSTRAP_SERVERS)
         .option("subscribe", f"{RAW_POSTS_TOPIC},{RAW_COMMENTS_TOPIC}")
-        .option("startingOffsets", "latest")
+        .option("startingOffsets", "earliest")
         .load()
     )
 
     df = (
         df_raw.select(F.from_json(F.col("value").cast("string"), schema).alias("v"))
         .select("v.*")
-        .withColumn("event_time", F.to_timestamp("created_utc"))
+        # Fix timestamp parsing for ISO8601 (e.g. 2026-01-21T16:28:54.833599+00:00)
+        .withColumn("event_time", F.to_timestamp(F.col("created_utc"))) 
+        # Note: In Spark 3.x, cast("timestamp") or to_timestamp usually handles ISO8601. 
+        # If it fails, we might need explicit format. 
+        # But let's try explicit cast which is more robust for ISO in newer Spark.
+        .withColumn("event_time", F.col("created_utc").cast("timestamp"))
         .withColumn("tokens", tokenize(F.col("text")))
+        # Move Watermark to specific queries to avoid dropping data early if parsing fails?
+        # But we need event_time for windowing.
         .withWatermark("event_time", WATERMARK_DURATION)
     )
 
@@ -259,6 +215,8 @@ def main() -> None:
         
         map_df = spark.createDataFrame(rows, schema=["topic_id", "term"])
         exploded = batch_df.select("*", F.explode_outer("tokens").alias("token")).withColumn("token", F.lower(F.col("token")))
+        
+        
         joined = exploded.join(map_df, exploded["token"] == map_df["term"], "inner")
         matched = joined.dropDuplicates(["event_id", "topic_id"])
         
@@ -283,7 +241,9 @@ def main() -> None:
         .load()
         .select(F.from_json(F.col("value").cast("string"), matched_json_schema).alias("data"))
         .select("data.*")
-        .withColumn("event_time", F.to_timestamp("created_utc"))
+        # Fix timestamp parsing for Job 2 as well
+        .withColumn("event_time", F.to_timestamp(F.col("created_utc")))
+        .withColumn("event_time", F.col("created_utc").cast("timestamp"))
         .withWatermark("event_time", WATERMARK_DURATION)
     )
 
@@ -304,35 +264,36 @@ def main() -> None:
         .option("kafka.bootstrap.servers", KAFKA_BOOTSTRAP_SERVERS)
         .option("topic", METRICS_TOPIC)
         .option("checkpointLocation", f"{CHECKPOINT_BASE}/metrics_adaptive")
-        .outputMode("append")
+        .outputMode("update")
         .start()
     )
 
     # ---------------------------------------------------------------------
-    # JOB 3: Adaptive Global Trends (N-grams)
+    # JOB 3: Adaptive Global Trends (N-grams) - DISABLED TEMPORARILY
     # ---------------------------------------------------------------------
-    ngram_df = (
-        df.select("*", F.explode(extract_ngrams(F.col("text"))).alias("ngram"))
-        .withWatermark("event_time", WATERMARK_DURATION)
-    )
+    # ngram_df = (
+    #     df.select("*", F.explode(extract_ngrams(F.col("text"))).alias("ngram"))
+    #     .withWatermark("event_time", WATERMARK_DURATION)
+    # )
 
-    # Compute Variants for N-grams
-    g_short = compute_windowed_metrics(ngram_df, "ngram", "30 minutes", "15 minutes", "30m")
-    g_med = compute_windowed_metrics(ngram_df, "ngram", "60 minutes", "30 minutes", "60m")
-    g_long = compute_windowed_metrics(ngram_df, "ngram", "120 minutes", "60 minutes", "120m")
+    # # Compute Variants for N-grams
+    # g_short = compute_windowed_metrics(ngram_df, "ngram", "30 minutes", "15 minutes", "30m")
+    # g_med = compute_windowed_metrics(ngram_df, "ngram", "60 minutes", "30 minutes", "60m")
+    # g_long = compute_windowed_metrics(ngram_df, "ngram", "120 minutes", "60 minutes", "120m")
 
-    df_all_trends = g_short.union(g_med).union(g_long)
+    # df_all_trends = g_short.union(g_med).union(g_long)
     
-    # Filter: Only significant trends
-    df_filtered_trends = df_all_trends.where(F.col("mentions") > 3)
+    
+    # # Filter: Only significant trends
+    # df_filtered_trends = df_all_trends.where(F.col("mentions") > 3)
 
-    top3_query = (
-        df_filtered_trends
-        .writeStream
-        .foreachBatch(lambda df, epoch: df.sort(F.col("trend_score").desc()).limit(10).write.format("kafka").option("kafka.bootstrap.servers", KAFKA_BOOTSTRAP_SERVERS).option("topic", GLOBAL_TRENDS_TOPIC).save())
-        .option("checkpointLocation", f"{CHECKPOINT_BASE}/global_trends_rank")
-        .start()
-    )
+    # top3_query = (
+    #     df_filtered_trends
+    #     .writeStream
+    #     .foreachBatch(lambda df, epoch: df.sort(F.col("mentions").desc()).limit(10).select(F.to_json(F.struct("*")).alias("value")).write.format("kafka").option("kafka.bootstrap.servers", KAFKA_BOOTSTRAP_SERVERS).option("topic", GLOBAL_TRENDS_TOPIC).save())
+    #     .option("checkpointLocation", f"{CHECKPOINT_BASE}/global_trends_rank")
+    #     .start()
+    # )
 
     spark.streams.awaitAnyTermination()
 

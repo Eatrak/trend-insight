@@ -86,6 +86,10 @@ services:
       - spark-master
     ports:
       - "8081:8081"
+    user: root
+    volumes:
+      - ./spark:/opt/spark-apps
+      - spark_checkpoint:/checkpoints
     command: ["/opt/spark/bin/spark-class","org.apache.spark.deploy.worker.Worker","spark://spark-master:7077","--webui-port","8081"]
 
   spark-streaming:
@@ -94,6 +98,7 @@ services:
     depends_on:
       - kafka
       - spark-master
+    user: root
     volumes:
       - ./spark:/opt/spark-apps
       - spark_checkpoint:/checkpoints
