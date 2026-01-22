@@ -8,12 +8,15 @@ import requests
 from kafka import KafkaProducer
 
 
+
+
 def _env(name: str, default: str = "") -> str:
     v = os.getenv(name)
     return v if v is not None and v != "" else default
 
 
 KAFKA_BOOTSTRAP_SERVERS = _env("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+print(f"DEBUG: module loaded. Kafka={KAFKA_BOOTSTRAP_SERVERS}", flush=True)
 USER_AGENT = _env("REDDIT_USER_AGENT", "reddit-insight/0.1")
 POLL_INTERVAL_SECONDS = int(_env("REDDIT_POLL_INTERVAL_SECONDS", "15"))
 SUBREDDITS = _env("REDDIT_SUBREDDITS", "all")
@@ -92,7 +95,16 @@ def extract_comment(child: dict[str, Any]) -> Optional[dict[str, Any]]:
 
 
 def poll_loop() -> None:
-    producer = make_producer()
+    print("[ingestion] Initializing producer...", flush=True)
+    producer = None
+    while producer is None:
+        try:
+            producer = make_producer()
+            print("[ingestion] Producer connected!", flush=True)
+        except Exception as e:
+            print(f"[ingestion] Failed to connect to Kafka ({e}). Retrying in 5s...", flush=True)
+            time.sleep(5)
+
     last_seen_posts: set[str] = set()
     last_seen_comments: set[str] = set()
 
@@ -102,12 +114,13 @@ def poll_loop() -> None:
     comments_url = f"https://www.reddit.com/r/{safe_subreddits}/comments.json"
 
     # --- Backfill Logic ---
-    print("[ingestion] Starting 24h backfill...")
-    backfill_limit = 1000 # Approx 24h for busy subs, more for quiet ones
+    print("[ingestion] Starting 48h backfill...", flush=True)
+    backfill_cutoff = time.time() - (48 * 3600) # 48 hours ago
     after: Optional[str] = None
     fetched_count = 0
+    keep_fetching = True
     
-    while fetched_count < backfill_limit:
+    while keep_fetching:
         try:
             params = {"limit": 100} # Max allowed by Reddit
             if after:
@@ -124,6 +137,14 @@ def poll_loop() -> None:
             for child in children:
                 msg = extract_post(child)
                 if not msg: continue
+                
+                # Time check
+                created_ts = float(child["data"].get("created_utc") or 0)
+                if created_ts < backfill_cutoff:
+                    print(f"[ingestion] Reached cutoff time (48h ago). Stopping backfill.")
+                    keep_fetching = False
+                    break # Stop processing this batch
+                
                 # dedupe
                 if msg["event_id"] in last_seen_posts: continue
                 
@@ -134,8 +155,12 @@ def poll_loop() -> None:
                 after = child["data"]["name"] # 't3_xxxxx'
             
             fetched_count += len(children)
+            if fetched_count > 5000: # Safety cap to prevent infinite loops on very active subs
+                 print("[ingestion] Hit safety cap (5000 posts). Stopping backfill.")
+                 break
+
             producer.flush()
-            time.sleep(2) # be nice during backfill
+            time.sleep(1) # be nice during backfill
 
         except Exception as e:
             print(f"[ingestion] Backfill error: {e}")

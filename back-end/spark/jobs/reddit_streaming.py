@@ -30,7 +30,7 @@ W2 = float(os.getenv("WEIGHT_ACCELERATION", "0.3"))
 W3 = float(os.getenv("WEIGHT_ENGAGEMENT", "0.2"))
 
 # Watermark
-WATERMARK_DURATION = "24 hours"
+WATERMARK_DURATION = "35 days"
 
 
 # -----------------------------------------------------------------------------
@@ -60,10 +60,19 @@ def extract_ngrams(text: str) -> List[str]:
         ngrams.append(f"{words[i]} {words[i+1]} {words[i+2]}")
     return ngrams
 
+import shutil
+
 def load_topics() -> List[Dict[str, Any]]:
     if not os.path.exists(TOPICS_DB_PATH):
         return []
-    conn = sqlite3.connect(TOPICS_DB_PATH)
+        
+    temp_db = "/tmp/topics_copy.db"
+    try:
+        shutil.copyfile(TOPICS_DB_PATH, temp_db)
+    except:
+        temp_db = TOPICS_DB_PATH
+
+    conn = sqlite3.connect(temp_db)
     conn.row_factory = sqlite3.Row
     try:
         rows = conn.execute("SELECT * FROM topics WHERE is_active = 1").fetchall()
@@ -86,7 +95,7 @@ def load_topics() -> List[Dict[str, Any]]:
         try:
             keywords = json.loads(keywords_raw) if keywords_raw.startswith("[") else split_csv(keywords_raw)
         except:
-             keywords = split_csv(keywords_raw)
+            keywords = split_csv(keywords_raw)
 
         out.append(
             {
@@ -225,7 +234,7 @@ def main() -> None:
 
     matched_query = (
         df.writeStream.foreachBatch(write_matched)
-        .option("checkpointLocation", f"{CHECKPOINT_BASE}/matched")
+        .option("checkpointLocation", f"{CHECKPOINT_BASE}/matched_v3")
         .start()
     )
 
@@ -248,12 +257,17 @@ def main() -> None:
     )
 
     # Compute Variants
-    # Short: 30m window, 15m slide
-    df_short = compute_windowed_metrics(df_matched_in, "topic_id", "30 minutes", "15 minutes", "30m")
-    # Med: 60m window, 30m slide
-    df_med = compute_windowed_metrics(df_matched_in, "topic_id", "60 minutes", "30 minutes", "60m")
-    # Long: 120m window, 60m slide
-    df_long = compute_windowed_metrics(df_matched_in, "topic_id", "120 minutes", "60 minutes", "120m")
+    # Short: 1 day window, 1 day slide (1d) - Tumbling
+    # Distinct Daily Bars
+    df_short = compute_windowed_metrics(df_matched_in, "topic_id", "1 day", "1 day", "1d")
+    
+    # Med: 7 days window, 7 days slide (1w) - Tumbling
+    # Distinct Weekly Bars
+    df_med = compute_windowed_metrics(df_matched_in, "topic_id", "7 days", "7 days", "1w")
+    
+    # Long: 30 days window, 30 days slide (1m) - Tumbling
+    # Distinct Monthly Bars
+    df_long = compute_windowed_metrics(df_matched_in, "topic_id", "30 days", "30 days", "1m")
 
     # Union all
     df_all_metrics = df_short.union(df_med).union(df_long)
@@ -263,7 +277,7 @@ def main() -> None:
         .writeStream.format("kafka")
         .option("kafka.bootstrap.servers", KAFKA_BOOTSTRAP_SERVERS)
         .option("topic", METRICS_TOPIC)
-        .option("checkpointLocation", f"{CHECKPOINT_BASE}/metrics_adaptive")
+        .option("checkpointLocation", f"{CHECKPOINT_BASE}/metrics_adaptive_v3")
         .outputMode("update")
         .start()
     )

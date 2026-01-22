@@ -139,7 +139,7 @@ app.get('/topics/:id/report', async (req: Request, res: Response) => {
           }
         },
         sort: [{ end: { order: 'desc' } }],
-        size: 100 // Pagination could be added
+        size: 1000 // Increased limit to capture all window types (30m/60m/120m) across recent updates
       }
     });
 
@@ -165,7 +165,7 @@ function enrichMetrics(rawDocs: any[]) {
     // 1. Group by window_type (30m, 60m, 120m)
     const groups: Record<string, any[]> = {};
     rawDocs.forEach(d => {
-        const type = d.window_type || '60m';
+        const type = d.window_type || '1d';
         if (!groups[type]) groups[type] = [];
         groups[type].push(d);
     });
@@ -177,9 +177,9 @@ function enrichMetrics(rawDocs: any[]) {
 
     // Duration map in hours
     const durationMap: Record<string, number> = {
-        "30m": 0.5,
-        "60m": 1.0, 
-        "120m": 2.0
+        "1d": 24.0,
+        "1w": 168.0, 
+        "1m": 720.0
     };
 
     // 2. Process each group
