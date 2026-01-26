@@ -44,11 +44,11 @@ export default function Dashboard() {
           
 
           {/* Topics Management Section */}
-          <div className="mx-auto w-full max-w-3xl grid gap-4 md:gap-5">
+          <div className="mx-auto w-full max-w-3xl flex flex-col items-center gap-2">
             
             <TopicCreator onTopicCreated={fetchData} />
 
-            <Card className="w-full">
+            <Card className="w-full glass mb-2">
               <CardHeader className="flex flex-row items-center">
                 <div className="grid gap-2">
                   <CardTitle>Tracked Topics</CardTitle>

@@ -316,14 +316,29 @@ app.post('/generate-config', async (req: Request, res: Response) => {
 // 7. POST /api/generate-random-prompt -> /generate-random-prompt (via proxy)
 app.post('/generate-random-prompt', async (req: Request, res: Response) => {
   try {
+    const categories = [
+      "Technology & Gadgets",
+      "Gaming & Esports",
+      "Movies & TV Shows",
+      "Cryptocurrency & Finance",
+      "Health & Fitness",
+      "Travel & Digital Nomad",
+      "Programming & AI",
+      "Politics & World News",
+      "Home Improvement & DIY",
+      "Music & Concerts"
+    ];
+    const randomCategory = categories[Math.floor(Math.random() * categories.length)];
+
     const prompt = `
-    Generate a SINGLE, realistic, short sentence (max 20 words) describing a specific topic a user might want to monitor on Reddit.
-    Examples:
-    - "Track discussions about the new iPhone release on technology subreddits."
-    - "Monitor sentiment around the latest AI agent frameworks."
-    - "Look for complaints about internet service providers in Italy."
+    Generate a SINGLE, realistic, short sentence (max 15 words) describing a specific user intent to monitor a topic related to the category: "${randomCategory}".
     
-    Output ONLY the sentence. No quotes, no explanations.
+    Examples of style (DO NOT COPY):
+    - "Track mentions of the new Pixel phone."
+    - "Monitor sentiment about the latest Marvel movie."
+    
+    Do NOT include "reddit.com" in the output; only mention subreddits.
+    Output ONLY the sentence. No quotes.
     `;
 
     const ollamaRes = await fetch('http://reddit-ollama:11434/api/generate', {
@@ -341,8 +356,11 @@ app.post('/generate-random-prompt', async (req: Request, res: Response) => {
     const data = await ollamaRes.json() as any;
     const result = data.response?.trim() || "Monitor trending topics in technology.";
     
-    // Cleanup if LLM adds quotes
-    const cleaned = result.replace(/^"|"$/g, '');
+    // Cleanup: Remove "Sentence:", quotes, and leading/trailing whitespace
+    const cleaned = result
+      .replace(/^(Sentence|Output|Response):\s*/i, '') // Remove prefixes like "Sentence:"
+      .replace(/^["']|["']$/g, '') // Remove surrounding quotes
+      .trim();
 
     res.json({ prompt: cleaned });
 

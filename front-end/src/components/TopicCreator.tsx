@@ -35,7 +35,12 @@ export default function TopicCreator({ onTopicCreated }: TopicCreatorProps) {
     setIsLoading(true);
     try {
       const result = await api.generateRandomPrompt();
-      setDescription(result.prompt);
+      const cleanPrompt = result.prompt
+        .replace(/^Prompt:\s*/i, "")
+        .replace(/reddit\.com\/r\//gi, "r/")
+        .replace(/reddit\.com/gi, "")
+        .replace(/https?:\/\//gi, "");
+      setDescription(cleanPrompt.trim());
     } catch (error) {
       console.error("Failed to generate prompt:", error);
     } finally {
@@ -97,7 +102,7 @@ export default function TopicCreator({ onTopicCreated }: TopicCreatorProps) {
           </p>
         </div>
 
-        <Card className="w-full shadow-lg border-primary/20">
+        <Card className="w-full shadow-2xl border-0 glass">
           <CardContent className="pt-6 space-y-4">
             <Textarea
               placeholder="e.g. I want to monitor discussions about the release of GTA VI and leaks..."
@@ -107,7 +112,7 @@ export default function TopicCreator({ onTopicCreated }: TopicCreatorProps) {
             />
             
             <div className="flex items-center justify-between">
-              <Button variant="outline" size="sm" onClick={handleRandomPrompt} className="gap-2 text-muted-foreground">
+              <Button size="sm" onClick={handleRandomPrompt} className="gap-2 btn-glow border-0 text-white font-medium hover:opacity-90">
                 <Sparkles className="h-4 w-4" />
                 Surprise Me
               </Button>
