@@ -114,59 +114,71 @@ def poll_loop() -> None:
     comments_url = f"https://www.reddit.com/r/{safe_subreddits}/comments.json"
 
     # --- Backfill Logic ---
-    print("[ingestion] Starting 48h backfill...", flush=True)
-    backfill_cutoff = time.time() - (48 * 3600) # 48 hours ago
-    after: Optional[str] = None
-    fetched_count = 0
-    keep_fetching = True
-    
-    while keep_fetching:
-        try:
-            params = {"limit": 100} # Max allowed by Reddit
-            if after:
-                params["after"] = after
-            
-            print(f"[ingestion] Backfill fetch offset={fetched_count} after={after}")
-            data = reddit_get_json(posts_url, params)
-            children = (data.get("data") or {}).get("children") or []
-            
-            if not children:
-                print("[ingestion] Backfill done (no more data).")
+    # --- Backfill Logic ---
+    STATE_FILE = "/app/backfill_state.json"
+    if os.path.exists(STATE_FILE):
+        print(f"[ingestion] Found state file at {STATE_FILE}. Skipping backfill.", flush=True)
+    else:
+        print("[ingestion] Starting 7 days backfill...", flush=True)
+        backfill_cutoff = time.time() - (7 * 24 * 3600) # 7 days ago
+        after: Optional[str] = None
+        fetched_count = 0
+        keep_fetching = True
+        
+        while keep_fetching:
+            try:
+                params = {"limit": 100} # Max allowed by Reddit
+                if after:
+                    params["after"] = after
+                
+                print(f"[ingestion] Backfill fetch offset={fetched_count} after={after}")
+                data = reddit_get_json(posts_url, params)
+                children = (data.get("data") or {}).get("children") or []
+                
+                if not children:
+                    print("[ingestion] Backfill done (no more data).")
+                    break
+
+                for child in children:
+                    msg = extract_post(child)
+                    if not msg: continue
+                    
+                    # Time check
+                    created_ts = float(child["data"].get("created_utc") or 0)
+                    if created_ts < backfill_cutoff:
+                        print(f"[ingestion] Reached cutoff time (7 days ago). Stopping backfill.")
+                        keep_fetching = False
+                        break # Stop processing this batch
+                    
+                    # dedupe
+                    if msg["event_id"] in last_seen_posts: continue
+                    
+                    producer.send("reddit.raw.posts", key=msg["event_id"], value=msg)
+                    last_seen_posts.add(msg["event_id"])
+                    
+                    # Update after token
+                    after = child["data"]["name"] # 't3_xxxxx'
+                
+                fetched_count += len(children)
+                if fetched_count > 100000: # Safety cap to prevent infinite loops on very active subs
+                     print("[ingestion] Hit safety cap (100000 posts). Stopping backfill.")
+                     break
+
+                producer.flush()
+                time.sleep(1) # be nice during backfill
+
+            except Exception as e:
+                print(f"[ingestion] Backfill error: {e}")
                 break
-
-            for child in children:
-                msg = extract_post(child)
-                if not msg: continue
                 
-                # Time check
-                created_ts = float(child["data"].get("created_utc") or 0)
-                if created_ts < backfill_cutoff:
-                    print(f"[ingestion] Reached cutoff time (48h ago). Stopping backfill.")
-                    keep_fetching = False
-                    break # Stop processing this batch
-                
-                # dedupe
-                if msg["event_id"] in last_seen_posts: continue
-                
-                producer.send("reddit.raw.posts", key=msg["event_id"], value=msg)
-                last_seen_posts.add(msg["event_id"])
-                
-                # Update after token
-                after = child["data"]["name"] # 't3_xxxxx'
-            
-            fetched_count += len(children)
-            if fetched_count > 5000: # Safety cap to prevent infinite loops on very active subs
-                 print("[ingestion] Hit safety cap (5000 posts). Stopping backfill.")
-                 break
-
-            producer.flush()
-            time.sleep(1) # be nice during backfill
-
+        print(f"[ingestion] Backfill complete. Fetched {fetched_count} posts. Switching to poll loop.")
+        # Write state
+        try:
+            with open(STATE_FILE, "w") as f:
+                json.dump({"completed_at": get_now_iso()}, f)
+            print(f"[ingestion] Wrote backfill state to {STATE_FILE}", flush=True)
         except Exception as e:
-            print(f"[ingestion] Backfill error: {e}")
-            break
-            
-    print(f"[ingestion] Backfill complete. Fetched {fetched_count} posts. Switching to poll loop.")
+            print(f"[ingestion] Failed to write state file: {e}", flush=True)
 
     # --- Main Poll Loop ---
     while True:
