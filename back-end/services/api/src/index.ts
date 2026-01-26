@@ -254,6 +254,104 @@ app.get('/trending/global', async (req: Request, res: Response) => {
   }
 });
 
+// 6. POST /api/generate-config -> /generate-config (via proxy)
+app.post('/generate-config', async (req: Request, res: Response) => {
+  try {
+    const { description } = req.body;
+    if (!description) {
+      res.status(400).json({ error: 'Description is required' });
+      return;
+    }
+
+    // Call Ollama
+    const prompt = `
+    You are a configuration generator for a Reddit monitoring tool.
+    Based on the following user description, extract a JSON object with:
+    - id: a short kebab-case identifier (max 20 chars)
+    - keywords: array of 3-10 relevant keywords/phrases
+    - subreddits: array of 3-5 relevant subreddits (no r/ prefix)
+    - description: a polished version of the user's description
+
+    User Description: "${description}"
+
+    Output ONLY raw JSON. No markdown, no explanations.
+    `;
+
+    const ollamaRes = await fetch('http://reddit-ollama:11434/api/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'tinyllama',
+        prompt: prompt,
+        stream: false,
+        format: 'json' 
+      })
+    });
+
+    if (!ollamaRes.ok) {
+        throw new Error(`Ollama API error: ${ollamaRes.statusText}`);
+    }
+
+    const data = await ollamaRes.json() as any;
+    let config = null;
+    try {
+        config = JSON.parse(data.response);
+    } catch {
+       // Fallback if model returns extra text despite instructions
+       // Simple regex to find JSON block
+       const match = data.response.match(/\{[\s\S]*\}/);
+       if (match) config = JSON.parse(match[0]);
+    }
+
+    if (!config) throw new Error("Failed to parse LLM response");
+
+    res.json(config);
+
+  } catch (error: any) {
+    console.error("LLM Error:", error);
+    res.status(500).json({ error: error.message || "Failed to generate config" });
+  }
+});
+
+// 7. POST /api/generate-random-prompt -> /generate-random-prompt (via proxy)
+app.post('/generate-random-prompt', async (req: Request, res: Response) => {
+  try {
+    const prompt = `
+    Generate a SINGLE, realistic, short sentence (max 20 words) describing a specific topic a user might want to monitor on Reddit.
+    Examples:
+    - "Track discussions about the new iPhone release on technology subreddits."
+    - "Monitor sentiment around the latest AI agent frameworks."
+    - "Look for complaints about internet service providers in Italy."
+    
+    Output ONLY the sentence. No quotes, no explanations.
+    `;
+
+    const ollamaRes = await fetch('http://reddit-ollama:11434/api/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'tinyllama',
+        prompt: prompt,
+        stream: false
+      })
+    });
+
+    if (!ollamaRes.ok) throw new Error(`Ollama API error: ${ollamaRes.statusText}`);
+
+    const data = await ollamaRes.json() as any;
+    const result = data.response?.trim() || "Monitor trending topics in technology.";
+    
+    // Cleanup if LLM adds quotes
+    const cleaned = result.replace(/^"|"$/g, '');
+
+    res.json({ prompt: cleaned });
+
+  } catch (error: any) {
+    console.error("LLM Error:", error);
+    res.status(500).json({ error: error.message || "Failed to generate prompt" });
+  }
+});
+
 function isJson(str: string) {
     try {
         JSON.parse(str);

@@ -73,4 +73,14 @@ export const api = {
     const response = await axios.get(`${API_BASE_URL}/trending/global`);
     return response.data;
   },
+
+  generateConfig: async (description: string): Promise<Partial<Topic>> => {
+    const response = await axios.post(`${API_BASE_URL}/generate-config`, { description });
+    return response.data;
+  },
+
+  generateRandomPrompt: async (): Promise<{ prompt: string }> => {
+    const response = await axios.post(`${API_BASE_URL}/generate-random-prompt`);
+    return response.data;
+  },
 };

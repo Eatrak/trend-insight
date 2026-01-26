@@ -145,8 +145,18 @@ services:
     volumes:
       - api_data:/data
 
+  ollama:
+    image: ollama/ollama:latest
+    container_name: reddit-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+    restart: unless-stopped
+
 volumes:
   es_data:
   api_data:
   spark_checkpoint:
+  ollama_models:
 

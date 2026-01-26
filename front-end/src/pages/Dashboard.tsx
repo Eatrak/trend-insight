@@ -11,17 +11,6 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import {
   Table,
   TableBody,
   TableCell,
@@ -33,13 +22,6 @@ import { api, type Topic } from "@/services/api";
 
 export default function Dashboard() {
   const [topics, setTopics] = useState<Topic[]>([]);
-  const [newTopic, setNewTopic] = useState({
-    id: "",
-    description: "",
-    keywords: "",
-    subreddits: "",
-  });
-  const [isDialogOpen, setIsDialogOpen] = useState(false);
 
   useEffect(() => {
     fetchData();
@@ -51,25 +33,6 @@ export default function Dashboard() {
       setTopics(topicsData);
     } catch (error) {
       console.error("Failed to fetch data:", error);
-    }
-  };
-
-  const handleCreateTopic = async () => {
-    try {
-      await api.createTopic({
-        id: newTopic.id,
-        description: newTopic.description,
-        keywords: newTopic.keywords.split(",").map((k) => k.trim()),
-        subreddits: newTopic.subreddits.split(",").map((s) => s.trim()),
-        update_frequency_seconds: 60,
-        is_active: true,
-      });
-      setIsDialogOpen(false);
-      fetchData();
-      setNewTopic({ id: "", description: "", keywords: "", subreddits: "" });
-    } catch (error) {
-        console.error("Failed to create topic:", error);
-      alert("Failed to create topic");
     }
   };
 
@@ -90,77 +53,14 @@ export default function Dashboard() {
                   </CardDescription>
                 </div>
                 <div className="ml-auto gap-1">
-                    <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-                      <DialogTrigger asChild>
-                        <Button size="sm" className="h-8 gap-1">
+                      <Button size="sm" className="h-8 gap-1" asChild>
+                          <Link to="/topics/new">
                             <Plus className="h-3.5 w-3.5" />
                             <span className="sr-only sm:not-sr-only sm:whitespace-nowrap">
                             Add Topic
                             </span>
-                        </Button>
-                      </DialogTrigger>
-                      <DialogContent className="sm:max-w-[425px]">
-                        <DialogHeader>
-                          <DialogTitle>Add New Topic</DialogTitle>
-                          <DialogDescription>
-                            Create a new topic to track keywords across subreddits.
-                          </DialogDescription>
-                        </DialogHeader>
-                        <div className="grid gap-4 py-4">
-                          <div className="grid grid-cols-4 items-center gap-4">
-                            <Label htmlFor="id" className="text-right">
-                              ID
-                            </Label>
-                            <Input
-                              id="id"
-                              value={newTopic.id}
-                              onChange={(e) => setNewTopic({ ...newTopic, id: e.target.value })}
-                              className="col-span-3"
-                              placeholder="e.g., ai-agents"
-                            />
-                          </div>
-                          <div className="grid grid-cols-4 items-center gap-4">
-                            <Label htmlFor="description" className="text-right">
-                              Description
-                            </Label>
-                            <Input
-                              id="description"
-                              value={newTopic.description}
-                              onChange={(e) => setNewTopic({ ...newTopic, description: e.target.value })}
-                              className="col-span-3"
-                              placeholder="Topic description"
-                            />
-                          </div>
-                           <div className="grid grid-cols-4 items-center gap-4">
-                            <Label htmlFor="keywords" className="text-right">
-                              Keywords
-                            </Label>
-                            <Input
-                              id="keywords"
-                              value={newTopic.keywords}
-                              onChange={(e) => setNewTopic({ ...newTopic, keywords: e.target.value })}
-                              className="col-span-3"
-                              placeholder="comma, separated, keywords"
-                            />
-                          </div>
-                           <div className="grid grid-cols-4 items-center gap-4">
-                            <Label htmlFor="subreddits" className="text-right">
-                              Subreddits
-                            </Label>
-                            <Input
-                              id="subreddits"
-                              value={newTopic.subreddits}
-                              onChange={(e) => setNewTopic({ ...newTopic, subreddits: e.target.value })}
-                              className="col-span-3"
-                              placeholder="technology, artificial"
-                            />
-                          </div>
-                        </div>
-                        <DialogFooter>
-                          <Button onClick={handleCreateTopic}>Create Topic</Button>
-                        </DialogFooter>
-                      </DialogContent>
-                    </Dialog>
+                          </Link>
+                      </Button>
                 </div>
               </CardHeader>
               <CardContent>
