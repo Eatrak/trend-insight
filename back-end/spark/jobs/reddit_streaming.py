@@ -163,7 +163,7 @@ def compute_windowed_metrics(
 # -----------------------------------------------------------------------------
 def main() -> None:
     spark = (
-        SparkSession.builder.appName("reddit-insight-streaming")
+        SparkSession.builder.appName("trend-insight-streaming")
         .config("spark.sql.shuffle.partitions", "4")
         .getOrCreate()
     )

@@ -1,6 +1,6 @@
-# Beginner's Guide to Reddit Insight
+# Beginner's Guide to Trend Insight
 
-Welcome to the **Reddit Insight** project! 👋
+Welcome to the **Trend Insight** project! 👋
 
 ## 🏗️ The Big Picture
 

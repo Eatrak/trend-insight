@@ -17,7 +17,7 @@ def _env(name: str, default: str = "") -> str:
 
 KAFKA_BOOTSTRAP_SERVERS = _env("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
 print(f"DEBUG: module loaded. Kafka={KAFKA_BOOTSTRAP_SERVERS}", flush=True)
-USER_AGENT = _env("REDDIT_USER_AGENT", "reddit-insight/0.1")
+USER_AGENT = _env("REDDIT_USER_AGENT", "trend-insight/0.1")
 POLL_INTERVAL_SECONDS = int(_env("REDDIT_POLL_INTERVAL_SECONDS", "15"))
 SUBREDDITS = _env("REDDIT_SUBREDDITS", "all")
 LIMIT = int(_env("REDDIT_LIMIT", "50"))

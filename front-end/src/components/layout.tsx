@@ -73,7 +73,7 @@ export default function Layout() {
                     </Sheet>
                     
                     {/* Breadcrumb / Title Placeholder for Mobile */}
-                    <div className="sm:hidden font-semibold text-lg">Reddit Insight</div>
+                    <div className="sm:hidden font-semibold text-lg">Trend Insight</div>
 
                 </header>
                 <main className="p-4 sm:p-0">

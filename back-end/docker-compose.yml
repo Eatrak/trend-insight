@@ -1,9 +1,9 @@
-name: reddit-insight
+name: trend-insight
 
 services:
   kafka:
     image: confluentinc/cp-kafka:7.6.1
-    container_name: reddit-kafka
+    container_name: trend-kafka
     ports:
       - "9092:9092"
     environment:
@@ -26,7 +26,7 @@ services:
 
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
-    container_name: reddit-kafka-ui
+    container_name: trend-kafka-ui
     depends_on:
       - kafka
     ports:
@@ -37,7 +37,7 @@ services:
 
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.13.4
-    container_name: reddit-elasticsearch
+    container_name: trend-elasticsearch
     environment:
       - discovery.type=single-node
       - xpack.security.enabled=false
@@ -49,7 +49,7 @@ services:
 
   kibana:
     image: docker.elastic.co/kibana/kibana:8.13.4
-    container_name: reddit-kibana
+    container_name: trend-kibana
     depends_on:
       - elasticsearch
     environment:
@@ -59,7 +59,7 @@ services:
 
   logstash:
     image: docker.elastic.co/logstash/logstash:8.13.4
-    container_name: reddit-logstash
+    container_name: trend-logstash
     depends_on:
       - kafka
       - elasticsearch
@@ -71,7 +71,7 @@ services:
 
   spark-master:
     image: apache/spark:3.5.0
-    container_name: reddit-spark-master
+    container_name: trend-spark-master
     ports:
       - "7077:7077"
       - "8080:8080"
@@ -81,7 +81,7 @@ services:
 
   spark-worker:
     image: apache/spark:3.5.0
-    container_name: reddit-spark-worker
+    container_name: trend-spark-worker
     depends_on:
       - spark-master
     ports:
@@ -94,7 +94,7 @@ services:
 
   spark-streaming:
     image: apache/spark:3.5.0
-    container_name: reddit-spark-streaming
+    container_name: trend-spark-streaming
     depends_on:
       - kafka
       - spark-master
@@ -118,12 +118,12 @@ services:
   ingestion:
     build:
       context: ./services/ingestion
-    container_name: reddit-ingestion
+    container_name: trend-ingestion
     depends_on:
       - kafka
     environment:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
-      - REDDIT_SUBREDDITS=technology,programming,python,artificial,machinelearning,askscience,worldnews,ItaliaCareerAdvice
+      - REDDIT_SUBREDDITS=technology,programming,webdev,softwareengineering,coding,learnprogramming,MachineLearning,artificial,ArtificialInteligence,datascience,bigdata,devops,netsec,selfhosted,linux,science,askscience,Physics,biology,chemistry,space,Astronomy,math,learnmath,explainlikeimfive,worldnews,news,europe,geopolitics,politics,worldpolitics,UpliftingNews,neutralnews,inthenews,TrueReddit,business,economics,finance,investing,stocks,StockMarket,CryptoCurrency,Bitcoin,entrepreneur,gaming,Games,pcgaming,PS5,XboxSeriesX,Nintendo,leagueoflegends,VALORANT,Movies,television,selfimprovement,productivity,GetMotivated,philosophy,psychology,Futurology,simpleliving,minimalism,socialskills,relationships,fitness,bodyweightfitness,running,nutrition,Health,sports,soccer,nba,formula1,MMA,art,design,graphic_design,photography,filmmakers,music,WeAreTheMusicMakers,edmproduction,writing,books,AskReddit,NoStupidQuestions,changemyview,TooAfraidToAsk,unpopularopinion,technologynews,startups,AItools,OpenAI,ethics,privacy,ClimateChange,environment,energy
       - REDDIT_POLL_INTERVAL_SECONDS=10
       - REDDIT_LIMIT=100
     restart: unless-stopped
@@ -132,7 +132,7 @@ services:
   api:
     build:
       context: ./services/api
-    container_name: reddit-api
+    container_name: trend-api
     depends_on:
       - elasticsearch
     environment:
@@ -140,23 +140,16 @@ services:
       - TOPICS_DB_PATH=/data/topics.db
       - BASIC_AUTH_USER=admin
       - BASIC_AUTH_PASS=admin
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - REDDIT_SUBREDDITS=technology,programming,webdev,softwareengineering,coding,learnprogramming,MachineLearning,artificial,ArtificialInteligence,datascience,bigdata,devops,netsec,selfhosted,linux,science,askscience,Physics,biology,chemistry,space,Astronomy,math,learnmath,explainlikeimfive,worldnews,news,europe,geopolitics,politics,worldpolitics,UpliftingNews,neutralnews,inthenews,TrueReddit,business,economics,finance,investing,stocks,StockMarket,CryptoCurrency,Bitcoin,entrepreneur,gaming,Games,pcgaming,PS5,XboxSeriesX,Nintendo,leagueoflegends,VALORANT,Movies,television,selfimprovement,productivity,GetMotivated,philosophy,psychology,Futurology,simpleliving,minimalism,socialskills,relationships,fitness,bodyweightfitness,running,nutrition,Health,sports,soccer,nba,formula1,MMA,art,design,graphic_design,photography,filmmakers,music,WeAreTheMusicMakers,edmproduction,writing,books,AskReddit,NoStupidQuestions,changemyview,TooAfraidToAsk,unpopularopinion,technologynews,startups,AItools,OpenAI,ethics,privacy,ClimateChange,environment,energy
     ports:
       - "8000:8000"
     volumes:
       - api_data:/data
 
-  ollama:
-    image: ollama/ollama:latest
-    container_name: reddit-ollama
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama_models:/root/.ollama
-    restart: unless-stopped
 
 volumes:
   es_data:
   api_data:
   spark_checkpoint:
-  ollama_models:
 

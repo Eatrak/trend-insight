@@ -83,4 +83,9 @@ export const api = {
     const response = await axios.post(`${API_BASE_URL}/generate-random-prompt`);
     return response.data;
   },
+
+  getSubreddits: async (): Promise<{ subreddits: string[] }> => {
+    const response = await axios.get(`${API_BASE_URL}/subreddits`);
+    return response.data;
+  },
 };

@@ -1,8 +1,8 @@
-# Reddit Insight – Complete Backend Technical Specification
+# Trend Insight – Complete Backend Technical Specification
 
 ## Document Purpose
 
-This document is a **complete, implementation-grade technical specification** for the Reddit Insight backend system.
+This document is a **complete, implementation-grade technical specification** for the Trend Insight backend system.
 
 The document is suitable for:
 
@@ -18,7 +18,7 @@ This specification intentionally avoids runtime LLM dependency for analytics log
 
 ### 1. Purpose of the System
 
-Reddit Insight is a backend-heavy, near–real-time data processing platform designed to ingest, process, and analyze **high-volume, fast-changing Reddit data**.
+Trend Insight is a backend-heavy, near–real-time data processing platform designed to ingest, process, and analyze **high-volume, fast-changing Reddit data**.
 
 The system focuses on:
 
@@ -83,7 +83,7 @@ This feature guarantees system usefulness even with zero user-defined topics.
 
 ### 3. High-Level Architecture
 
-Reddit Insight follows an **event-driven, stream-first architecture**.
+Trend Insight follows an **event-driven, stream-first architecture**.
 
 Core components:
 

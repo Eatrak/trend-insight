@@ -1,6 +1,6 @@
-# Reddit Insight – Usage & Testing Guide
+# Trend Insight – Usage & Testing Guide
 
-This document explains how to run, configure, and verify the Reddit Insight backend.
+This document explains how to run, configure, and verify the Trend Insight backend.
 
 ## 1. Prerequisites
 

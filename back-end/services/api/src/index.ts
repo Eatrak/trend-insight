@@ -1,3 +1,4 @@
+import OpenAI from 'openai';
 import express, { Request, Response } from 'express';
 import Database from 'better-sqlite3';
 import { Client } from '@elastic/elasticsearch';
@@ -12,6 +13,15 @@ app.use(express.json());
 const PORT = process.env.PORT || 8000;
 const TOPICS_DB_PATH = process.env.TOPICS_DB_PATH || '/data/topics.db';
 const ELASTICSEARCH_URL = process.env.ELASTICSEARCH_URL || 'http://elasticsearch:9200';
+
+// ----------------------------------------------------------------------------
+// OpenAI Client
+// ----------------------------------------------------------------------------
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
+const DEFAULT_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 
 // ----------------------------------------------------------------------------
 // Storage: SQLite (Topics)
@@ -49,6 +59,29 @@ const esClient = new Client({
 // API Endpoints
 // ----------------------------------------------------------------------------
 
+app.get('/subreddits', (req: Request, res: Response) => {
+  const allowedSubreddits = (process.env.REDDIT_SUBREDDITS || "").split(',').map(s => s.trim()).filter(s => s.length > 0);
+  res.json({ subreddits: allowedSubreddits });
+});
+
+// 2. GET /topics
+app.get('/topics', (req: Request, res: Response) => {
+  try {
+    const stmt = db.prepare('SELECT * FROM topics');
+    const rows = stmt.all();
+    // Parse JSON fields
+    const topics = rows.map((r: any) => ({
+      ...r,
+      keywords: isJson(r.keywords) ? JSON.parse(r.keywords) : r.keywords,
+      subreddits: (r.subreddits || "").split(','),
+      filters: JSON.parse(r.filters_json || '{}')
+    }));
+    res.json(topics);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // 1. POST /topics
 app.post('/topics', (req: Request, res: Response) => {
   try {
@@ -82,24 +115,6 @@ app.post('/topics', (req: Request, res: Response) => {
   }
 });
 
-// 2. GET /topics
-app.get('/topics', (req: Request, res: Response) => {
-  try {
-    const stmt = db.prepare('SELECT * FROM topics');
-    const rows = stmt.all();
-    // Parse JSON fields
-    const topics = rows.map((r: any) => ({
-      ...r,
-      keywords: isJson(r.keywords) ? JSON.parse(r.keywords) : r.keywords,
-      subreddits: r.subreddits.split(','),
-      filters: JSON.parse(r.filters_json || '{}')
-    }));
-    res.json(topics);
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
 // 3. GET /topics/{id}
 app.get('/topics/:id', (req: Request, res: Response) => {
   try {
@@ -114,7 +129,7 @@ app.get('/topics/:id', (req: Request, res: Response) => {
     res.json({
       ...topic,
        keywords: isJson(topic.keywords) ? JSON.parse(topic.keywords) : topic.keywords,
-       subreddits: topic.subreddits.split(','),
+       subreddits: (topic.subreddits || "").split(','),
        filters: JSON.parse(topic.filters_json || '{}')
     });
   } catch (error: any) {
@@ -254,7 +269,7 @@ app.get('/trending/global', async (req: Request, res: Response) => {
   }
 });
 
-// 6. POST /api/generate-config -> /generate-config (via proxy)
+// 6. POST /generate-config
 app.post('/generate-config', async (req: Request, res: Response) => {
   try {
     const { description } = req.body;
@@ -263,109 +278,108 @@ app.post('/generate-config', async (req: Request, res: Response) => {
       return;
     }
 
-    // Call Ollama
-    const prompt = `
-    You are a configuration generator for a Reddit monitoring tool.
-    Based on the following user description, extract a JSON object with:
-    - id: a short kebab-case identifier (max 20 chars)
-    - keywords: array of 3-10 relevant keywords/phrases
-    - subreddits: array of 3-5 relevant subreddits (no r/ prefix)
-    - description: a polished version of the user's description
+    if (!process.env.OPENAI_API_KEY) {
+      res.status(500).json({ error: 'OPENAI_API_KEY is not configured' });
+      return;
+    }
 
-    User Description: "${description}"
+    const allowedSubreddits = (process.env.REDDIT_SUBREDDITS || "").split(',').map(s => s.trim());
+    const allowedListString = allowedSubreddits.join(', ');
 
-    Output ONLY raw JSON. No markdown, no explanations.
-    `;
+    const completion = await openai.chat.completions.create({
+      model: DEFAULT_MODEL,
+      messages: [
+        {
+          role: "system",
+          content: `You are a configuration generator for a trend monitoring tool.
+          Based on the user description, extract a JSON object with:
+          - id: a strictly kebab-case identifier (max 30 chars).
+          - keywords: array of 3-10 relevant keywords/phrases.
+          - subreddits: array of 3-5 relevant subreddits selected ONLY from the provided allowed list.
+          - description: a polished version of the user's description.
 
-    const ollamaRes = await fetch('http://reddit-ollama:11434/api/generate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'tinyllama',
-        prompt: prompt,
-        stream: false,
-        format: 'json' 
-      })
+          ALLOWED SUBREDDITS: [${allowedListString}]
+
+          IMPORTANT: You must ONLY choose subreddits from the ALLOWED SUBREDDITS list. Do NOT invent new ones.`
+        },
+        {
+          role: "user",
+          content: description
+        }
+      ],
+      response_format: { type: "json_object" }
     });
 
-    if (!ollamaRes.ok) {
-        throw new Error(`Ollama API error: ${ollamaRes.statusText}`);
+    const responseContent = completion.choices[0].message?.content;
+    if (!responseContent) throw new Error("Empty response from OpenAI");
+
+    let config = JSON.parse(responseContent);
+
+    // FALLBACK: Ensure ID is kebab-case and not generic
+    if (!config.id || config.id.includes('topic-id') || config.id.match(/[A-Z\s]/)) {
+        const source = (config.keywords && config.keywords[0]) || description;
+        config.id = source
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/(^-|-$)/g, '')
+          .slice(0, 30);
     }
 
-    const data = await ollamaRes.json() as any;
-    let config = null;
-    try {
-        config = JSON.parse(data.response);
-    } catch {
-       // Fallback if model returns extra text despite instructions
-       // Simple regex to find JSON block
-       const match = data.response.match(/\{[\s\S]*\}/);
-       if (match) config = JSON.parse(match[0]);
+    // SANITIZER: Ensure subreddits is array of strings
+    if (config.subreddits && Array.isArray(config.subreddits)) {
+        config.subreddits = config.subreddits.map((s: any) => 
+            typeof s === 'string' ? s : (s.name || s.id || JSON.stringify(s))
+        );
     }
-
-    if (!config) throw new Error("Failed to parse LLM response");
 
     res.json(config);
 
   } catch (error: any) {
-    console.error("LLM Error:", error);
+    console.error("OpenAI Error:", error);
     res.status(500).json({ error: error.message || "Failed to generate config" });
   }
 });
 
-// 7. POST /api/generate-random-prompt -> /generate-random-prompt (via proxy)
+// 7. POST /generate-random-prompt
 app.post('/generate-random-prompt', async (req: Request, res: Response) => {
   try {
+    if (!process.env.OPENAI_API_KEY) {
+      res.status(500).json({ error: 'OPENAI_API_KEY is not configured' });
+      return;
+    }
+
     const categories = [
-      "Technology & Gadgets",
-      "Gaming & Esports",
-      "Movies & TV Shows",
-      "Cryptocurrency & Finance",
-      "Health & Fitness",
-      "Travel & Digital Nomad",
-      "Programming & AI",
-      "Politics & World News",
-      "Home Improvement & DIY",
-      "Music & Concerts"
+      "Technology & Gadgets", "Gaming & Esports", "Movies & TV Shows",
+      "Cryptocurrency & Finance", "Health & Fitness", "Travel & Digital Nomad",
+      "Programming & AI", "Politics & World News", "Home Improvement & DIY", "Music & Concerts"
     ];
     const randomCategory = categories[Math.floor(Math.random() * categories.length)];
 
-    const prompt = `
-    Generate a SINGLE, realistic, short sentence (max 15 words) describing a specific user intent to monitor a topic related to the category: "${randomCategory}".
-    
-    Examples of style (DO NOT COPY):
-    - "Track mentions of the new Pixel phone."
-    - "Monitor sentiment about the latest Marvel movie."
-    
-    Do NOT include "reddit.com" in the output; only mention subreddits.
-    Output ONLY the sentence. No quotes.
-    `;
-
-    const ollamaRes = await fetch('http://reddit-ollama:11434/api/generate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'tinyllama',
-        prompt: prompt,
-        stream: false
-      })
+    const completion = await openai.chat.completions.create({
+      model: DEFAULT_MODEL,
+      messages: [
+        {
+          role: "system",
+          content: "Generate a SINGLE, realistic, short sentence (max 15 words) describing a specific user intent to monitor a topic related to the user's category. Do NOT mention specific subreddits or 'reddit.com'. Output only the sentence."
+        },
+        {
+          role: "user",
+          content: `Category: ${randomCategory}`
+        }
+      ]
     });
 
-    if (!ollamaRes.ok) throw new Error(`Ollama API error: ${ollamaRes.statusText}`);
-
-    const data = await ollamaRes.json() as any;
-    const result = data.response?.trim() || "Monitor trending topics in technology.";
+    const result = completion.choices[0].message?.content?.trim() || "";
     
-    // Cleanup: Remove "Sentence:", quotes, and leading/trailing whitespace
     const cleaned = result
-      .replace(/^(Sentence|Output|Response):\s*/i, '') // Remove prefixes like "Sentence:"
-      .replace(/^["']|["']$/g, '') // Remove surrounding quotes
+      .replace(/^(Sentence|Output|Response|Prompt|Here is a sentence):\s*/i, '')
+      .replace(/^["']|["']$/g, '')
       .trim();
 
     res.json({ prompt: cleaned });
 
   } catch (error: any) {
-    console.error("LLM Error:", error);
+    console.error("OpenAI Error:", error);
     res.status(500).json({ error: error.message || "Failed to generate prompt" });
   }
 });
