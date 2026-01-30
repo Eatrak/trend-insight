@@ -23,6 +23,7 @@ export default function TopicDetail() {
   const [metrics, setMetrics] = useState<Metric[]>([]);
   const [selectedWindow, setSelectedWindow] = useState<string>("1d");
   const [selectedRange, setSelectedRange] = useState<number>(7);
+  const [isBackfilling, setIsBackfilling] = useState(false);
 
   useEffect(() => {
     if (id) {
@@ -105,18 +106,29 @@ export default function TopicDetail() {
                      <Button 
                         size="sm" 
                         variant="outline"
-                        disabled={topic.backfill_status === 'PENDING' || topic.backfill_status === 'COMPLETED'}
+                        disabled={isBackfilling || topic.backfill_status === 'PENDING' || topic.backfill_status === 'COMPLETED'}
                         onClick={async () => {
                             try {
+                                setIsBackfilling(true);
                                 setTopic(prev => prev ? ({ ...prev, backfill_status: 'PENDING' }) : null);
                                 await api.triggerBackfill(topic.id);
                             } catch (e) {
                                 console.error(e);
+                                // In case of 500 error where the job was actually queued (e.g. ES down but DB updated)
+                                try {
+                                    const updated = await api.getTopic(topic.id);
+                                    if (updated.backfill_status === 'PENDING') {
+                                        setTopic(updated);
+                                        return;
+                                    }
+                                } catch (ignore) { /* empty */ }
                                 setTopic(prev => prev ? ({ ...prev, backfill_status: 'ERROR' }) : null);
+                            } finally {
+                                setIsBackfilling(false);
                             }
                         }}
                      >
-                        {topic.backfill_status === 'PENDING' ? 'Loading data...' : 
+                        {isBackfilling || topic.backfill_status === 'PENDING' ? 'Loading data...' : 
                          topic.backfill_status === 'COMPLETED' ? 'History Loaded' : 
                          'Load 7-Day History'}
                      </Button>
