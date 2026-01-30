@@ -94,6 +94,20 @@ def extract_comment(child: dict[str, Any]) -> Optional[dict[str, Any]]:
     }
 
 
+def get_all_subreddits() -> list[str]:
+    """
+    Fetches the full list of allowed subreddits from the API.
+    """
+    try:
+        # Use the internal docker DNS name for the API service
+        r = requests.get("http://trend-api:8000/subreddits", timeout=5)
+        r.raise_for_status()
+        data = r.json()
+        return data.get("subreddits", [])
+    except Exception as e:
+        print(f"[ingestion] Failed to fetch subreddits from API: {e}", flush=True)
+        return []
+
 def poll_loop() -> None:
     print("[ingestion] Initializing producer...", flush=True)
     producer = None
@@ -108,45 +122,89 @@ def poll_loop() -> None:
     last_seen_posts: set[str] = set()
     last_seen_comments: set[str] = set()
 
-    # Sanitized Subreddits
-    safe_subreddits = SUBREDDITS.replace(",", "+")
-    posts_url = f"https://www.reddit.com/r/{safe_subreddits}/new.json"
-    comments_url = f"https://www.reddit.com/r/{safe_subreddits}/comments.json"
-
     # --- Main Poll Loop ---
     while True:
         try:
-            # Poll Posts
-            posts = reddit_get_json(posts_url, {"limit": LIMIT})
-            for child in (posts.get("data") or {}).get("children") or []:
-                msg = extract_post(child)
-                if not msg: continue
-                if msg["event_id"] in last_seen_posts: continue
-                
-                producer.send("reddit.raw.posts", key=msg["event_id"], value=msg)
-                last_seen_posts.add(msg["event_id"])
+            # 1. Fetch All Allowed Subreddits
+            # We fetch this every loop just in case the env var in API changes (unlikely) or valid list changes.
+            # But the user asked to fetch "all listed subreddits".
+            target_subs = get_all_subreddits()
             
-            # Simple cap
-            if len(last_seen_posts) > 10000:
-                last_seen_posts = set(list(last_seen_posts)[-5000:])
+            if not target_subs:
+                print("[ingestion] No subreddits found. Sleeping...", flush=True)
+                time.sleep(POLL_INTERVAL_SECONDS)
+                continue
 
-            # Poll Comments (Backfill not strictly needed for comments as velocity relies mainly on post counts for now)
-            comments = reddit_get_json(comments_url, {"limit": LIMIT})
-            for child in (comments.get("data") or {}).get("children") or []:
-                msg = extract_comment(child)
-                if not msg: continue
-                if msg["event_id"] in last_seen_comments: continue
+            print(f"[ingestion] Polling {len(target_subs)} subreddits (Full List)...", flush=True)
+
+            # 2. Batch Request (Reddit maxes out around 100 subs joined by plus, but we use 50 for safety)
+            BATCH_SIZE = 50
+            chunks = [target_subs[i:i + BATCH_SIZE] for i in range(0, len(target_subs), BATCH_SIZE)]
+
+            for chunk in chunks:
+                if not chunk: continue
+                safe_subreddits = "+".join(chunk)
+                posts_url = f"https://www.reddit.com/r/{safe_subreddits}/new.json"
+                comments_url = f"https://www.reddit.com/r/{safe_subreddits}/comments.json"
                 
-                producer.send("reddit.raw.comments", key=msg["event_id"], value=msg)
-                last_seen_comments.add(msg["event_id"])
-            
-            if len(last_seen_comments) > 10000:
-                last_seen_comments = set(list(last_seen_comments)[-5000:])
+                # --- Poll Posts ---
+                try:
+                    posts = reddit_get_json(posts_url, {"limit": LIMIT})
+                    children = (posts.get("data") or {}).get("children") or []
+                    
+                    new_posts_count = 0
+                    for child in children:
+                        msg = extract_post(child)
+                        if not msg: continue
+                        if msg["event_id"] in last_seen_posts: continue
+                        
+                        producer.send("reddit.raw.posts", key=msg["event_id"], value=msg)
+                        last_seen_posts.add(msg["event_id"])
+                        new_posts_count += 1
+                        
+                    print(f"[ingestion] Chunk {chunk[0]}...: {len(children)} posts fetched, {new_posts_count} new.", flush=True)
 
+                except Exception as e:
+                    print(f"[ingestion] Error fetching posts for chunk: {e}", flush=True)
+                
+                # Respect rate limits between calls
+                time.sleep(2) 
+
+                # --- Poll Comments ---
+                try:
+                    comments = reddit_get_json(comments_url, {"limit": LIMIT})
+                    children = (comments.get("data") or {}).get("children") or []
+                    
+                    new_comments_count = 0
+                    for child in children:
+                        msg = extract_comment(child)
+                        if not msg: continue
+                        if msg["event_id"] in last_seen_comments: continue
+                        
+                        producer.send("reddit.raw.comments", key=msg["event_id"], value=msg)
+                        last_seen_comments.add(msg["event_id"])
+                        new_comments_count += 1
+
+                    print(f"[ingestion] Chunk {chunk[0]}...: {len(children)} comments fetched, {new_comments_count} new.", flush=True)
+
+                except Exception as e:
+                    print(f"[ingestion] Error fetching comments for chunk: {e}", flush=True)
+
+                # Rate limit between chunks
+                time.sleep(2)
+
+            # Memory Hygiene
+            if len(last_seen_posts) > 20000:
+                last_seen_posts = set(list(last_seen_posts)[-10000:])
+            if len(last_seen_comments) > 20000:
+                last_seen_comments = set(list(last_seen_comments)[-10000:])
+            
             producer.flush(timeout=10)
-        except Exception as e:  # noqa: BLE001
-            print(f"[ingestion] error: {e}")
 
+        except Exception as e:  # noqa: BLE001
+            print(f"[ingestion] Main loop error: {e}", flush=True)
+
+        print(f"[ingestion] Sleeping for {POLL_INTERVAL_SECONDS}s...", flush=True)
         time.sleep(POLL_INTERVAL_SECONDS)
 
 
@@ -163,15 +221,22 @@ def backfill_task_consumer():
     """
     print("[worker] Starting backfill consumer thread...", flush=True)
     
-    # Needs a separate consumer group
-    from kafka import KafkaConsumer
-    consumer = KafkaConsumer(
-        "reddit.tasks.backfill",
-        bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS.split(","),
-        group_id="ingestion-backfill-worker",
-        value_deserializer=lambda v: json.loads(v.decode("utf-8")),
-        auto_offset_reset="latest"
-    )
+    # Retry logic for Consumer connection
+    consumer = None
+    while consumer is None:
+        try:
+            from kafka import KafkaConsumer
+            consumer = KafkaConsumer(
+                "reddit.tasks.backfill",
+                bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS.split(","),
+                group_id="ingestion-backfill-worker",
+                value_deserializer=lambda v: json.loads(v.decode("utf-8")),
+                auto_offset_reset="latest"
+            )
+            print("[worker] Backfill consumer connected!", flush=True)
+        except Exception as e:
+             print(f"[worker] Failed to connect consumer: {e}. Retrying in 5s...", flush=True)
+             time.sleep(5)
 
     producer = make_producer() # Dedicated producer for worker
 
@@ -255,18 +320,40 @@ def perform_backfill(topic_id: str, subreddits: list[str], producer: KafkaProduc
                     
                 time.sleep(1.5) # Respect rate limits
                 
+                # Progress Logging
+                if fetched % 500 == 0:
+                     current_date = datetime.fromtimestamp(ts).strftime('%Y-%m-%d %H:%M')
+                     
+                     # Calculate percentage of time covered
+                     # 100% means we reached cutoff (7 days ago). 0% means we are at "now".
+                     now = time.time()
+                     total_seconds = 7 * 24 * 3600
+                     elapsed = now - ts
+                     percent = min(100.0, max(0.0, (elapsed / total_seconds) * 100))
+                     
+                     print(f"[worker] Backfill progress: {fetched} posts fetched. Reached {current_date} ({percent:.1f}%)", flush=True)
+                     
+                     # Send progress to API
+                     update_api_status(topic_id, None, percent)
+                
             except Exception as e:
                 print(f"[worker] Chunk error: {e}")
                 break
     
     print(f"[worker] Backfill for {topic_id} complete.", flush=True)
-    update_api_status(topic_id, "COMPLETED")
+    update_api_status(topic_id, "COMPLETED", 100.0)
 
 
-def update_api_status(topic_id: str, status: str):
+def update_api_status(topic_id: str, status: Optional[str] = None, percentage: Optional[float] = None):
     try:
         api_url = f"http://trend-api:8000/topics/{topic_id}/status" # Internal docker DNS
-        requests.patch(api_url, json={"status": status}, timeout=5)
+        payload = {}
+        if status: payload["status"] = status
+        if percentage is not None: payload["percentage"] = percentage
+        
+        if not payload: return
+        
+        requests.patch(api_url, json=payload, timeout=5)
     except Exception as e:
         print(f"[worker] Failed to update status for {topic_id}: {e}")
 

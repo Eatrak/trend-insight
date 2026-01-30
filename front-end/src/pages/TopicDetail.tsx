@@ -26,24 +26,51 @@ export default function TopicDetail() {
   const [isBackfilling, setIsBackfilling] = useState(false);
 
   useEffect(() => {
+    let intervalId: ReturnType<typeof setInterval>;
+
     if (id) {
-      api.getTopic(id).then(setTopic).catch(console.error);
-      api.getTopicReport(id).then((data) => {
+       const fetchTopic = async () => {
+          try {
+             const t = await api.getTopic(id);
+             setTopic(t);
+             // Stop polling if completed or error
+             if (t.backfill_status !== 'PENDING') {
+                 clearInterval(intervalId);
+             }
+          } catch(e) { console.error(e); }
+       }
+
+       // Initial fetch
+       fetchTopic();
+       api.getTopicReport(id).then((data) => {
         setMetrics(data.metrics);
-         // Default to first available window type if 1d not found
-         if (data.metrics.length > 0) {
+        if (data.metrics.length > 0) {
             const has1d = data.metrics.some(m => m.window_type === "1d");
             if (!has1d) {
                 setSelectedWindow(data.metrics[0].window_type);
             }
         }
-      }).catch(console.error);
+       }).catch(console.error);
+       
+       // Poll for status updates
+       intervalId = setInterval(() => {
+           setTopic(prev => {
+               if (prev && prev.backfill_status === 'PENDING') {
+                   fetchTopic();
+               }
+               return prev;
+           })
+       }, 2000); // 2 seconds
     }
+
+    return () => clearInterval(intervalId);
   }, [id]);
 
   if (!topic) {
     return <div className="p-8">Loading topic...</div>;
   }
+  
+  // ... (rest of filtering) ...
 
   // Fixed window types (Resolution)
   const ALL_WINDOW_TYPES = ["1d", "1w", "1m"];
@@ -110,11 +137,10 @@ export default function TopicDetail() {
                         onClick={async () => {
                             try {
                                 setIsBackfilling(true);
-                                setTopic(prev => prev ? ({ ...prev, backfill_status: 'PENDING' }) : null);
+                                setTopic(prev => prev ? ({ ...prev, backfill_status: 'PENDING', backfill_percentage: 0 }) : null);
                                 await api.triggerBackfill(topic.id);
                             } catch (e) {
                                 console.error(e);
-                                // In case of 500 error where the job was actually queued (e.g. ES down but DB updated)
                                 try {
                                     const updated = await api.getTopic(topic.id);
                                     if (updated.backfill_status === 'PENDING') {
@@ -128,7 +154,8 @@ export default function TopicDetail() {
                             }
                         }}
                      >
-                        {isBackfilling || topic.backfill_status === 'PENDING' ? 'Loading data...' : 
+                        {isBackfilling || topic.backfill_status === 'PENDING' ? 
+                           `Backfilling... ${(topic.backfill_percentage || 0).toFixed(1)}%` : 
                          topic.backfill_status === 'COMPLETED' ? 'History Loaded' : 
                          'Load 7-Day History'}
                      </Button>

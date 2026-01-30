@@ -18,6 +18,7 @@ export interface Topic {
   is_active: boolean;
   updated_at?: string;
   backfill_status?: string; // IDLE, PENDING, COMPLETED, ERROR
+  backfill_percentage?: number;
 }
 
 export interface Metric {

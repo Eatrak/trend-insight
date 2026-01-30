@@ -40,7 +40,8 @@ db.exec(`
     update_frequency_seconds INTEGER DEFAULT 60,
     is_active INTEGER DEFAULT 1,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    backfill_status TEXT DEFAULT 'IDLE' -- IDLE, PENDING, COMPLETED, ERROR
+    backfill_status TEXT DEFAULT 'IDLE', -- IDLE, PENDING, COMPLETED, ERROR
+    backfill_percentage REAL DEFAULT 0.0
   );
 `);
 
@@ -48,11 +49,37 @@ db.exec(`
 try {
   db.exec("ALTER TABLE topics ADD COLUMN backfill_status TEXT DEFAULT 'IDLE'");
 } catch (e: any) {
-  // Ignore error if column already exists
-  if (!e.message.includes("duplicate column name")) {
-    console.error("Migration Error:", e.message);
-  }
+  // Ignore
 }
+
+// Migration: Add backfill_percentage if missing
+try {
+  db.exec("ALTER TABLE topics ADD COLUMN backfill_percentage REAL DEFAULT 0.0");
+} catch (e: any) {
+  // Ignore
+}
+
+// ... (Rest of code)
+
+// 9. PATCH /topics/:id/status
+app.patch('/topics/:id/status', (req: Request, res: Response) => {
+    try {
+        const { status, percentage } = req.body;
+        const id = req.params.id;
+
+        if (status) {
+            db.prepare("UPDATE topics SET backfill_status = ? WHERE id = ?").run(status, id);
+        }
+        
+        if (percentage !== undefined) {
+             db.prepare("UPDATE topics SET backfill_percentage = ? WHERE id = ?").run(percentage, id);
+        }
+
+        res.json({ success: true });
+    } catch (error: any) {
+        res.status(500).json({ error: error.message });
+    }
+});
 
 // ----------------------------------------------------------------------------
 // Kafka Producer (for backfill tasks)
@@ -62,7 +89,24 @@ const kafka = new Kafka({
   brokers: (process.env.KAFKA_BOOTSTRAP_SERVERS || 'kafka:9092').split(',')
 });
 const producer = kafka.producer();
-producer.connect().catch(console.error);
+
+const connectProducer = async () => {
+  let retries = 5;
+  while (retries > 0) {
+    try {
+      await producer.connect();
+      console.log('Kafka Producer connected');
+      return;
+    } catch (error) {
+      console.error('Kafka Producer connection failed, retrying...', error);
+      retries--;
+      await new Promise(res => setTimeout(res, 5000));
+    }
+  }
+  console.error('Could not connect to Kafka after multiple retries.');
+};
+
+connectProducer();
 
 
 // ----------------------------------------------------------------------------
@@ -199,12 +243,17 @@ app.post('/topics/:id/backfill', async (req: Request, res: Response) => {
 // 9. PATCH /topics/:id/status
 app.patch('/topics/:id/status', (req: Request, res: Response) => {
     try {
-        const { status } = req.body;
-        if (!status) {
-            res.status(400).json({ error: "Missing status" });
-            return;
+        const { status, percentage } = req.body;
+        const id = req.params.id;
+
+        if (status) {
+            db.prepare("UPDATE topics SET backfill_status = ? WHERE id = ?").run(status, id);
         }
-        db.prepare("UPDATE topics SET backfill_status = ? WHERE id = ?").run(status, req.params.id);
+        
+        if (percentage !== undefined) {
+             db.prepare("UPDATE topics SET backfill_percentage = ? WHERE id = ?").run(percentage, id);
+        }
+
         res.json({ success: true });
     } catch (error: any) {
         res.status(500).json({ error: error.message });
