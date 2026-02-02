@@ -21,7 +21,6 @@ const CONFIG = {
   API_BASE_URL: process.env.API_BASE_URL || "http://trend-api:8000",
 };
 
-// Kafka Client Setup
 const kafka = new Kafka({
   clientId: "ingestion-service",
   brokers: CONFIG.KAFKA_SERVERS,
@@ -68,7 +67,18 @@ async function startRealTimeIngestion() {
  * Worker to handle historical backfill requests.
  */
 async function startBackfilling() {
-  const consumer = kafka.consumer({ groupId: "ingestion-backfill-worker" });
+  const consumer = kafka.consumer({
+    groupId: "ingestion-backfill-worker",
+    // 2 mins. How long Kafka is willing to wait before it gives up on the worker.
+    // By default it's 30 seconds, but if a request to Reddit takes longer than that, Kafka will consider the worker as failed.
+    sessionTimeout: 120000,
+    // 30s. How often the worker intends to check in.
+    // We also use manual heartbeats during active backfilling,
+    // because during backfilling the worker is busy and doesn't want to check in.
+    heartbeatInterval: 30000,
+    // 2 mins. To allow long-running backfills to complete gracefully before Kafka reorders workers
+    rebalanceTimeout: 120000,
+  });
   const producer = await Utils.getProducer(kafka);
 
   // Establish connection and subscribe to the backfill task queue
@@ -77,101 +87,124 @@ async function startBackfilling() {
 
   // Start the consumer loop to process backfill requests
   await consumer.run({
-    eachMessage: async ({ message }) => {
-      // Parse the task payload containing topic ID and subreddits to scrape
-      const payload = JSON.parse(message.value?.toString() || "{}");
-      const { topic_id, subreddits = [] } = payload;
+    eachBatch: async ({
+      batch,
+      resolveOffset,
+      heartbeat,
+      isRunning,
+      isStale,
+    }) => {
+      for (const message of batch.messages) {
+        if (!isRunning() || isStale()) break;
 
-      if (!subreddits.length) return;
-
-      // Configuration for the backfill window and limits
-      const MAX_FETCH_LIMIT = 5000; // Safety cap on total posts per topic
-      const LOOKBACK_SECONDS = 7 * 24 * 3600; // We look back 7 days
-      const cutoff = dayjs().unix() - LOOKBACK_SECONDS;
-      const subredditsQuery = subreddits.slice(0, 100).join("+");
-
-      let after: string | null = null;
-      let fetchedCount = 0;
-      let isFinished = false;
-
-      // Iterate through Reddit's paginated results
-      while (!isFinished && fetchedCount < MAX_FETCH_LIMIT) {
         try {
-          // Request the latest posts from the combined subreddits
-          const response = await RedditService.request(
-            `https://www.reddit.com/r/${subredditsQuery}/new.json`,
-            { limit: 100, after },
-            CONFIG.USER_AGENT,
+          const rawValue = message.value?.toString();
+          if (!rawValue) continue;
+
+          const payload = JSON.parse(rawValue);
+          const { topic_id, subreddits = [] } = payload;
+
+          console.log(
+            `[backfill] Topic: ${topic_id} | Subreddits: ${subreddits.join(", ")}`,
           );
 
-          const posts = response.data?.children || [];
-          if (!posts.length) break;
-
-          for (const post of posts) {
-            const postToStore = Utils.extractContent(post, "post");
-
-            // Determine if we've reached posts older than our cutoff time
-            const isPastCutoff =
-              !postToStore || dayjs(postToStore.created_utc).unix() < cutoff;
-
-            if (isPastCutoff) {
-              isFinished = true;
-              break;
-            }
-
-            // Forward the raw post data to the ingestion pipeline via Kafka
-            await producer.send({
-              topic: "reddit.raw.posts",
-              messages: [
-                {
-                  key: postToStore.event_id,
-                  value: JSON.stringify(postToStore),
-                },
-              ],
-            });
+          if (!Array.isArray(subreddits) || !subreddits.length) {
+            await axios.patch(
+              `${CONFIG.API_BASE_URL}/topics/${topic_id}/status`,
+              { status: "COMPLETED", percentage: 100 },
+            );
+            resolveOffset(message.offset);
+            continue;
           }
 
-          fetchedCount += posts.length;
+          const MAX_FETCH_LIMIT = 5000;
+          const LOOKBACK_SECONDS = 7 * 24 * 3600;
+          const cutoff = dayjs().unix() - LOOKBACK_SECONDS;
+          const subredditsQuery = subreddits.slice(0, 100).join("+");
 
-          let lastPost = posts[posts.length - 1];
+          let after: string | null = null;
+          let fetchedCount = 0;
+          let isFinished = false;
 
-          // Track the 'after' token for the next page of results
-          after = lastPost.data.name;
+          while (!isFinished && fetchedCount < MAX_FETCH_LIMIT) {
+            try {
+              // Send heartbeat to Kafka to keep the session alive
+              await heartbeat();
 
-          // Calculate progress percentage based on the age of the last fetched post, relative to the backfill window
-          const lastPostTimestamp = posts[posts.length - 1].data.created_utc;
-          const progress = Math.min(
-            100,
-            Math.max(
-              0,
-              ((dayjs().unix() - lastPostTimestamp) / LOOKBACK_SECONDS) * 100,
-            ),
-          );
+              const response = await RedditService.request(
+                `https://www.reddit.com/r/${subredditsQuery}/new.json`,
+                { limit: 100, after },
+                CONFIG.USER_AGENT,
+              );
 
-          // Report current progress back to the API for UI updates
+              if (!response || !response.data) break;
+
+              const posts = response.data.children || [];
+              if (!posts.length) break;
+
+              for (const post of posts) {
+                const postToStore = Utils.extractContent(post, "post");
+                const isPastCutoff =
+                  !postToStore ||
+                  dayjs(postToStore.created_utc).unix() < cutoff;
+
+                if (isPastCutoff) {
+                  isFinished = true;
+                  break;
+                }
+
+                await producer.send({
+                  topic: "reddit.raw.posts",
+                  messages: [
+                    {
+                      key: postToStore.event_id,
+                      value: JSON.stringify(postToStore),
+                    },
+                  ],
+                });
+              }
+
+              fetchedCount += posts.length;
+              let lastPost = posts[posts.length - 1];
+              after = lastPost.data.name;
+
+              const progress = Math.min(
+                100,
+                Math.max(
+                  0,
+                  ((dayjs().unix() - lastPost.data.created_utc) /
+                    LOOKBACK_SECONDS) *
+                    100,
+                ),
+              );
+              await axios.patch(
+                `${CONFIG.API_BASE_URL}/topics/${topic_id}/status`,
+                { percentage: progress },
+              );
+
+              await Utils.sleep(1500);
+            } catch (error: any) {
+              console.error(
+                `[backfill] Error in batch for ${topic_id}:`,
+                error.message,
+              );
+              break;
+            }
+          }
+
           await axios.patch(
             `${CONFIG.API_BASE_URL}/topics/${topic_id}/status`,
-            {
-              percentage: progress,
-            },
+            { status: "COMPLETED", percentage: 100 },
           );
-
-          // Respect Reddit API rate limits with a short delay between batches
-          await Utils.sleep(1500);
-        } catch (error) {
+          resolveOffset(message.offset);
+          await heartbeat();
+        } catch (err: any) {
           console.error(
-            `[backfill] Error processing batch for topic ${topic_id}:`,
-            error,
+            `[backfill] Critical error processing message:`,
+            err.message,
           );
-          break;
         }
       }
-
-      // Finalize the task status once processing is done or limit is reached
-      await axios.patch(`${CONFIG.API_BASE_URL}/topics/${topic_id}/status`, {
-        status: "COMPLETED",
-        percentage: 100,
-      });
     },
   });
 }
