@@ -275,7 +275,7 @@ app.get('/topics/:id/report', async (req: Request, res: Response) => {
         query: {
           bool: {
             must: [
-              { match: { topic_id: topicId } }
+              { term: { "topic_id.keyword": topicId } }
             ]
           }
         },
