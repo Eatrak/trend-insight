@@ -1,15 +1,15 @@
 import axios from "axios";
-import { Kafka, Producer, logLevel } from "kafkajs";
+import { Kafka, logLevel } from "kafkajs";
 import dotenv from "dotenv";
 import dayjs from "dayjs";
 import { Utils } from "./utils.js";
+import { RedditService } from "./reddit.service.js";
 
 // Initialize environment variables
 dotenv.config();
 
 /**
  * Service Configuration
- * Centralized settings for Kafka connection, Reddit polling, and internal API URLs.
  */
 const CONFIG = {
   KAFKA_SERVERS: (
@@ -29,104 +29,29 @@ const kafka = new Kafka({
 });
 
 /**
- * Helper to make requests to Reddit with automatic 429 (Rate Limit) handling.
+ * Worker for real-time data ingestion.
  */
-async function redditRequest(url: string, params: any): Promise<any> {
-  try {
-    const response = await axios.get(url, {
-      headers: { "User-Agent": CONFIG.USER_AGENT },
-      params,
-      timeout: 20000,
-    });
-    return response.data;
-  } catch (error: any) {
-    // If throttled, Reddit provides a wait time in headers. We wait and retry.
-    if (error.response?.status === 429) {
-      const retryAfter = parseInt(error.response.headers["retry-after"] || "5");
-      console.warn(`[ingestion] Rate limited (429). Waiting ${retryAfter}s...`);
-      await Utils.sleep(retryAfter * 1000);
-      return redditRequest(url, params);
-    }
-    throw error;
-  }
-}
-
-/**
- * Connects and returns a Kafka Producer. Retries indefinitely if the broker is unavailable.
- */
-async function getProducer(): Promise<Producer> {
-  const producer = kafka.producer();
-  while (true) {
-    try {
-      await producer.connect();
-      return producer;
-    } catch (e: any) {
-      console.error(
-        `[ingestion] Kafka connection failed: ${e.message}. Retrying...`,
-      );
-      await Utils.sleep(5000);
-    }
-  }
-}
-
-/**
- * Polls Reddit for new posts and comments across a list of subreddits.
- */
-async function pollReddit(producer: Producer, subs: string[], lastSeen: any) {
-  const subStr = subs.join("+");
-  for (const type of ["post", "comment"] as const) {
-    try {
-      const url = `https://www.reddit.com/r/${subStr}/${type === "post" ? "new" : "comments"}.json`;
-      const data = await redditRequest(url, { limit: CONFIG.POST_LIMIT });
-      const children = data.data?.children || [];
-
-      for (const child of children) {
-        const msg = Utils.extractContent(child, type);
-        // Deduplication: Only send if we haven't seen this ID in the current session
-        if (msg && !lastSeen[type].has(msg.event_id)) {
-          await producer.send({
-            topic: `reddit.raw.${type}s`,
-            messages: [{ key: msg.event_id, value: JSON.stringify(msg) }],
-          });
-          lastSeen[type].add(msg.event_id);
-        }
-      }
-      await Utils.sleep(2000); // Wait between batch types
-    } catch (e: any) {
-      console.error(`[ingestion] Error polling ${type}s:`, e.message);
-    }
-  }
-}
-
-/**
- * Main loop for real-time data ingestion.
- * Periodically fetches target subreddits and scans them for new content.
- */
-async function startPolling() {
-  const producer = await getProducer();
-  // Use Sets to track content we've already ingested to avoid duplicates in the same session
+async function startRealTimeIngestion() {
+  const producer = await Utils.getProducer(kafka);
   const lastSeen = { post: new Set<string>(), comment: new Set<string>() };
 
   while (true) {
     try {
-      // Get subreddits currently being tracked by the system
       const res = await axios.get(`${CONFIG.API_BASE_URL}/subreddits`, {
         timeout: 5000,
       });
       const subreddits = (res.data as any).subreddits || [];
 
-      if (subreddits.length === 0) {
-        await Utils.sleep(CONFIG.POLL_INTERVAL * 1000);
-        continue;
-      }
-
-      // Sync subreddits in chunks to avoid URL length limits
-      for (let i = 0; i < subreddits.length; i += 50) {
-        await pollReddit(producer, subreddits.slice(i, i + 50), lastSeen);
+      if (subreddits.length > 0) {
+        await RedditService.poll(
+          producer,
+          subreddits.slice(0, 100),
+          lastSeen,
+          CONFIG,
+        );
         await Utils.sleep(2000);
       }
 
-      // Memory Management: Keep 'seen' sets from growing indefinitely
       for (const key in lastSeen) {
         const set = (lastSeen as any)[key];
         if (set.size > 20000)
@@ -141,77 +66,108 @@ async function startPolling() {
 
 /**
  * Worker to handle historical backfill requests.
- * Triggers when a new topic is added to fetch the last 7 days of posts.
  */
-async function startBackfill() {
+async function startBackfilling() {
   const consumer = kafka.consumer({ groupId: "ingestion-backfill-worker" });
-  const producer = await getProducer();
+  const producer = await Utils.getProducer(kafka);
+
+  // Establish connection and subscribe to the backfill task queue
   await consumer.connect();
   await consumer.subscribe({ topic: "reddit.tasks.backfill" });
 
+  // Start the consumer loop to process backfill requests
   await consumer.run({
     eachMessage: async ({ message }) => {
-      const { topic_id, subreddits = [] } = JSON.parse(
-        message.value?.toString() || "{}",
-      );
-      if (subreddits.length === 0) return;
+      // Parse the task payload containing topic ID and subreddits to scrape
+      const payload = JSON.parse(message.value?.toString() || "{}");
+      const { topic_id, subreddits = [] } = payload;
 
-      const cutoff = dayjs().unix() - 7 * 24 * 3600; // 7-day window
-      for (let i = 0; i < subreddits.length; i += 50) {
-        const chunk = subreddits.slice(i, i + 50).join("+");
-        let after = null,
-          fetched = 0,
-          keep = true;
+      if (!subreddits.length) return;
 
-        // Paginate through Reddit results until we hit the cutoff date
-        while (keep) {
-          try {
-            const data = await redditRequest(
-              `https://www.reddit.com/r/${chunk}/new.json`,
-              { limit: 100, after },
-            );
-            const children = data.data?.children || [];
-            if (children.length === 0) break;
+      // Configuration for the backfill window and limits
+      const MAX_FETCH_LIMIT = 5000; // Safety cap on total posts per topic
+      const LOOKBACK_SECONDS = 7 * 24 * 3600; // We look back 7 days
+      const cutoff = dayjs().unix() - LOOKBACK_SECONDS;
+      const subredditsQuery = subreddits.slice(0, 100).join("+");
 
-            for (const child of children) {
-              const msg = Utils.extractContent(child, "post");
-              // Stop if we reach a post that is older than 7 days
-              if (!msg || dayjs(msg.created_utc).unix() < cutoff) {
-                keep = false;
-                break;
-              }
+      let after: string | null = null;
+      let fetchedCount = 0;
+      let isFinished = false;
 
-              await producer.send({
-                topic: "reddit.raw.posts",
-                messages: [{ key: msg.event_id, value: JSON.stringify(msg) }],
-              });
-              after = child.data.name;
+      // Iterate through Reddit's paginated results
+      while (!isFinished && fetchedCount < MAX_FETCH_LIMIT) {
+        try {
+          // Request the latest posts from the combined subreddits
+          const response = await RedditService.request(
+            `https://www.reddit.com/r/${subredditsQuery}/new.json`,
+            { limit: 100, after },
+            CONFIG.USER_AGENT,
+          );
+
+          const posts = response.data?.children || [];
+          if (!posts.length) break;
+
+          for (const post of posts) {
+            const postToStore = Utils.extractContent(post, "post");
+
+            // Determine if we've reached posts older than our cutoff time
+            const isPastCutoff =
+              !postToStore || dayjs(postToStore.created_utc).unix() < cutoff;
+
+            if (isPastCutoff) {
+              isFinished = true;
+              break;
             }
 
-            fetched += children.length;
-            if (fetched > 5000) break; // Safety cap per subreddit batch
-
-            // Report progress percentage back to the API for the UI progress bar
-            const lastPostTs = children[children.length - 1].data.created_utc;
-            const percentage = Math.min(
-              100,
-              Math.max(
-                0,
-                ((dayjs().unix() - lastPostTs) / (7 * 24 * 3600)) * 100,
-              ),
-            );
-            await axios.patch(
-              `${CONFIG.API_BASE_URL}/topics/${topic_id}/status`,
-              { percentage },
-            );
-
-            await Utils.sleep(1500); // Respect Reddit API between pages
-          } catch (e: any) {
-            break;
+            // Forward the raw post data to the ingestion pipeline via Kafka
+            await producer.send({
+              topic: "reddit.raw.posts",
+              messages: [
+                {
+                  key: postToStore.event_id,
+                  value: JSON.stringify(postToStore),
+                },
+              ],
+            });
           }
+
+          fetchedCount += posts.length;
+
+          let lastPost = posts[posts.length - 1];
+
+          // Track the 'after' token for the next page of results
+          after = lastPost.data.name;
+
+          // Calculate progress percentage based on the age of the last fetched post, relative to the backfill window
+          const lastPostTimestamp = posts[posts.length - 1].data.created_utc;
+          const progress = Math.min(
+            100,
+            Math.max(
+              0,
+              ((dayjs().unix() - lastPostTimestamp) / LOOKBACK_SECONDS) * 100,
+            ),
+          );
+
+          // Report current progress back to the API for UI updates
+          await axios.patch(
+            `${CONFIG.API_BASE_URL}/topics/${topic_id}/status`,
+            {
+              percentage: progress,
+            },
+          );
+
+          // Respect Reddit API rate limits with a short delay between batches
+          await Utils.sleep(1500);
+        } catch (error) {
+          console.error(
+            `[backfill] Error processing batch for topic ${topic_id}:`,
+            error,
+          );
+          break;
         }
       }
-      // Mark task as finished
+
+      // Finalize the task status once processing is done or limit is reached
       await axios.patch(`${CONFIG.API_BASE_URL}/topics/${topic_id}/status`, {
         status: "COMPLETED",
         percentage: 100,
@@ -220,6 +176,5 @@ async function startBackfill() {
   });
 }
 
-// Kick off the services concurrently
-startPolling();
-startBackfill();
+startRealTimeIngestion();
+startBackfilling();
