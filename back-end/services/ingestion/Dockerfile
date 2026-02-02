@@ -1,15 +1,13 @@
-FROM python:3.12-slim
+FROM node:20-slim
 
 WORKDIR /app
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
 
-RUN pip install --no-cache-dir --upgrade pip
+COPY package*.json ./
+RUN npm install
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY tsconfig.json ./
+COPY src ./src
 
-COPY app ./app
+RUN npm run build
 
-CMD ["python", "-m", "app.main"]
-
+CMD ["npm", "start"]

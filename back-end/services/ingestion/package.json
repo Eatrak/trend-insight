@@ -1,0 +1,26 @@
+{
+  "name": "ingestion",
+  "version": "1.0.0",
+  "description": "TypeScript ingestion service for trend-insight",
+  "type": "module",
+  "scripts": {
+    "dev": "ts-node-esm src/index.ts",
+    "start": "node dist/index.js",
+    "build": "tsc"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^1.13.4",
+    "dayjs": "^1.11.19",
+    "dotenv": "^17.2.3",
+    "kafkajs": "^2.2.4"
+  },
+  "devDependencies": {
+    "@types/axios": "^0.9.36",
+    "@types/node": "^25.2.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  }
+}
