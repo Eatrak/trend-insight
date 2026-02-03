@@ -12,6 +12,7 @@ from pyspark.sql import types as T
 
 # -----------------------------------------------------------------------------
 # Configuration & Constants
+# These define where Kafka is, where the database lives, and which topics to use.
 # -----------------------------------------------------------------------------
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
 TOPICS_DB_PATH = os.getenv("TOPICS_DB_PATH", "/data/topics.db")
@@ -39,12 +40,16 @@ WATERMARK_DURATION = "35 days"
 
 WORD_RE = re.compile(r"[a-zA-Z0-9_]{2,}")
 
+# UDF (User Defined Function) to split text into a list of words.
+# We use this to analyze the content of posts.
 @F.udf(returnType=T.ArrayType(T.StringType()))
 def tokenize(text: str) -> List[str]:
     if not text:
         return []
     return [m.group(0).lower() for m in WORD_RE.finditer(text)]
 
+# UDF to extract n-grams (phrases of 2 or 3 words).
+# This helps identify trending phrases like "machine learning" instead of just "machine".
 @F.udf(returnType=T.ArrayType(T.StringType()))
 def extract_ngrams(text: str) -> List[str]:
     if not text:
@@ -62,6 +67,8 @@ def extract_ngrams(text: str) -> List[str]:
 
 import shutil
 
+# Loads the list of topics we want to track from a local SQLite database.
+# Returns a list of dictionaries with topic_id, keywords, subreddits, etc.
 def load_topics() -> List[Dict[str, Any]]:
     if not os.path.exists(TOPICS_DB_PATH):
         return []
@@ -110,6 +117,8 @@ def load_topics() -> List[Dict[str, Any]]:
 
 # -----------------------------------------------------------------------------
 # Core Logic: Windowed Metrics Computation
+# This function calculates stats (mentions, engagement) over time windows.
+# For example: "How many times was this topic mentioned in the last hour?"
 # -----------------------------------------------------------------------------
 def compute_windowed_metrics(
     df_stream, 
@@ -160,6 +169,8 @@ def compute_windowed_metrics(
 
 # -----------------------------------------------------------------------------
 # 2. Main Job
+# This is the entry point for the Spark application.
+# It sets up the data processing pipeline.
 # -----------------------------------------------------------------------------
 def main() -> None:
     spark = (
@@ -170,6 +181,8 @@ def main() -> None:
     spark.conf.set("spark.sql.streaming.statefulOperator.checkCorrectness.enabled", "false")
 
     # Strict Schema
+    # Defines the structure of the JSON data coming from Kafka.
+    # We must tell Spark exactly what fields to expect.
     schema = T.StructType(
         [
             T.StructField("event_id", T.StringType(), True),
@@ -192,6 +205,7 @@ def main() -> None:
         .load()
     )
 
+    # Parse JSON from Kafka and clean up the data
     df = (
         df_raw.select(F.from_json(F.col("value").cast("string"), schema).alias("v"))
         .select("v.*")
@@ -208,7 +222,9 @@ def main() -> None:
     )
 
     # ---------------------------------------------------------------------
-    # JOB 1: Topic Matching (Pass-through, no change needed)
+    # JOB 1: Topic Matching
+    # This job checks every incoming post against our list of keywords.
+    # If a post matches a topic, it's sent to the 'reddit.topic.matched' Kafka topic.
     # ---------------------------------------------------------------------
     def write_matched(batch_df, batch_id: int) -> None:
         topics = load_topics()
@@ -240,7 +256,12 @@ def main() -> None:
 
     # ---------------------------------------------------------------------
     # JOB 2: Adaptive Topic Metrics
-    # (30m/15m, 60m/30m, 120m/60m)
+    # This job reads the matched posts and calculates aggregate metrics.
+    # It computes stats for:
+    # - Short term: 1 day windows
+    # - Medium term: 7 day windows
+    # - Long term: 30 day windows
+    # The results are sent to 'reddit.topic.metrics'.
     # ---------------------------------------------------------------------
     matched_json_schema = schema.add("topic_id", T.StringType()).add("tokens", T.ArrayType(T.StringType()))
     df_matched_in = (
@@ -284,6 +305,8 @@ def main() -> None:
 
     # ---------------------------------------------------------------------
     # JOB 3: Adaptive Global Trends (N-grams) - DISABLED TEMPORARILY
+    # This job would find trending phrases across all posts, even if they aren't
+    # in our topic list. It is currently commented out to save resources.
     # ---------------------------------------------------------------------
     # ngram_df = (
     #     df.select("*", F.explode(extract_ngrams(F.col("text"))).alias("ngram"))
