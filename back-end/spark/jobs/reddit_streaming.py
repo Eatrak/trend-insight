@@ -33,44 +33,37 @@ DATA_HISTORY_WINDOW = "35 days"
 def get_active_topics() -> List[Dict[str, Any]]:
     """
     Reads the 'topics' table from the database and prepares the list of keywords.
+    We copy the database to /tmp first to prevent 'Database Locked' errors when
+    the API is writing and Spark is reading at the same time.
     """
     if not os.path.exists(DATABASE_PATH): return []
-        
-    # Copy DB to /tmp to avoid locking issues while the API is using it
+    
+    # 1. Copy DB to avoid locking conflicts
     temp_db = "/tmp/topics_copy.db"
     try:
         shutil.copyfile(DATABASE_PATH, temp_db)
     except:
         temp_db = DATABASE_PATH
 
-    conn = sqlite3.connect(temp_db)
-    conn.row_factory = sqlite3.Row
-    try:
-        # Only load topics that are currently 'active'
-        rows = conn.execute("SELECT id, keywords FROM topics WHERE is_active = 1").fetchall()
-    except Exception as e:
-        print(f"ERROR loading topics: {e}")
-        return []
-    finally:
-        conn.close()
-
-    def parse_keywords(raw: str) -> List[str]:
-        raw = (raw or "").strip()
-        if not raw: return []
-        # Support both JSON arrays ["keyword1"] and simple CSV "keyword1, keyword2"
-        try:
-            if raw.startswith("["):
-                return json.loads(raw)
-            return [x.strip().lower() for x in raw.split(",") if x.strip()]
-        except:
-            return [x.strip().lower() for x in raw.split(",") if x.strip()]
-
+    # 2. Connect and fetch active topics
     topics = []
-    for r in rows:
-        topics.append({
-            "id": r["id"],
-            "keywords": parse_keywords(r["keywords"]),
-        })
+    try:
+        with sqlite3.connect(temp_db) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute("SELECT id, keywords FROM topics WHERE is_active = 1").fetchall()
+            
+            for r in rows:
+                raw_kws = (r["keywords"] or "").strip()
+                # Handle both formats: ["json", "list"] or "comma, separated, text"
+                if raw_kws.startswith("["):
+                    kws = json.loads(raw_kws)
+                else:
+                    kws = [x.strip().lower() for x in raw_kws.split(",") if x.strip()]
+                
+                topics.append({"id": r["id"], "keywords": kws})
+    except Exception as e:
+        log(f"ERROR: Could not load topics from database: {e}")
+
     return topics
 
 def log(msg: str):
