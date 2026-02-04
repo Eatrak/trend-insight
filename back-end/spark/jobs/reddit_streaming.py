@@ -3,216 +3,175 @@ import os
 import re
 import sqlite3
 import shutil
-import sys
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import List, Dict, Any
 
-from pyspark.sql import SparkSession, functions as F, types as T
-
-# =============================================================================
-# 1. CONFIGURATION
-# =============================================================================
-# These tell Spark where to find Kafka and the database
-KAFKA_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
-DATABASE_PATH = os.getenv("TOPICS_DB_PATH", "/data/topics.db")
-CHECKPOINTS   = os.getenv("SPARK_CHECKPOINT_BASE", "/checkpoints")
-
-# Data Topics (Channels)
-RAW_POSTS_TOPIC    = "reddit.raw.posts"
-RAW_COMMENTS_TOPIC = "reddit.raw.comments"
-MATCHED_TOPIC      = "reddit.topic.matched.v2"
-METRICS_TOPIC      = "reddit.topic.metrics"
-
-# How long to keep data in memory (35 days)
-DATA_HISTORY_WINDOW = "35 days"
+from pyspark.sql import SparkSession, functions as F
 
 # =============================================================================
-# 2. HELPER FUNCTIONS
+# 1. SETTINGS
+# =============================================================================
+# Kafka details
+KAFKA_URL      = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
+DATABASE_URL   = "/data/topics.db"
+CHECKPOINT_DIR = "/checkpoints"
+
+# Data Channels
+RAW_POSTS_DATA   = "reddit.raw.posts"
+RAW_COMMENTS_DATA = "reddit.raw.comments"
+MATCHED_DATA_OUT = "reddit.topic.matched.v2"
+FINAL_METRICS_OUT = "reddit.topic.metrics"
+
+# =============================================================================
+# 2. DATA SHAPE (The Schema)
+# =============================================================================
+# We define our data using simple SQL-style descriptions
+POST_SCHEMA    = "event_id STRING, created_utc STRING, text STRING, score INT, num_comments INT"
+MATCHED_SCHEMA = f"{POST_SCHEMA}, topic_id STRING, term STRING"
+
+# =============================================================================
+# 3. HELPER: Get Topics from Database
 # =============================================================================
 
-def get_active_topics() -> List[Dict[str, Any]]:
-    """
-    Reads the 'topics' table from the database and prepares the list of keywords.
-    We copy the database to /tmp first to prevent 'Database Locked' errors when
-    the API is writing and Spark is reading at the same time.
-    """
-    if not os.path.exists(DATABASE_PATH): return []
+def get_topics_to_watch():
+    """Reads your topics and keywords from the database."""
+    if not os.path.exists(DATABASE_URL): return []
     
-    # 1. Copy DB to avoid locking conflicts
-    temp_db = "/tmp/topics_copy.db"
+    # Copy DB locally to prevent "Database Locked" errors
     try:
-        shutil.copyfile(DATABASE_PATH, temp_db)
+        shutil.copyfile(DATABASE_URL, "/tmp/topics.db")
     except:
-        temp_db = DATABASE_PATH
+        pass
 
-    # 2. Connect and fetch active topics
     topics = []
-    try:
-        with sqlite3.connect(temp_db) as conn:
-            conn.row_factory = sqlite3.Row
-            rows = conn.execute("SELECT id, keywords FROM topics WHERE is_active = 1").fetchall()
-            
-            for r in rows:
-                raw_kws = (r["keywords"] or "").strip()
-                # Handle both formats: ["json", "list"] or "comma, separated, text"
-                if raw_kws.startswith("["):
-                    kws = json.loads(raw_kws)
-                else:
-                    kws = [x.strip().lower() for x in raw_kws.split(",") if x.strip()]
-                
+    with sqlite3.connect("/tmp/topics.db") as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute("SELECT id, keywords FROM topics WHERE is_active = 1").fetchall()
+        for r in rows:
+            raw = (r["keywords"] or "").strip()
+            # Handle both JSON: ["war", "news"] and String: "war, news" formats
+            try:
+                kws = json.loads(raw) if raw.startswith("[") else [x.strip().lower() for x in raw.split(",") if x]
                 topics.append({"id": r["id"], "keywords": kws})
-    except Exception as e:
-        log(f"ERROR: Could not load topics from database: {e}")
-
+            except:
+                continue
     return topics
 
-def log(msg: str):
-    """Simple logger to track progress in the debug.log file."""
-    with open("/opt/spark-apps/debug.log", "a") as f:
-        f.write(f"{datetime.now()} - {msg}\n")
-
 # =============================================================================
-# 3. CORE PROCESSING LOGIC
+# 4. JOB 1: THE MATCHER
 # =============================================================================
 
-def process_matching_batch(batch_df, batch_id: int):
-    """
-    JOB 1: Scans every new Reddit post for your topic keywords.
-    """
-    active_topics = get_active_topics()
-    if not active_topics: return
+def find_topic_matches(batch_df, batch_id):
+    """Checks every Reddit post against your list of topics."""
+    topics = get_topics_to_watch()
+    if not topics: return
 
-    # A. Build a matching 'filter' for each topic
-    topic_patterns = []
-    for t in active_topics:
-        kws = t["keywords"]
-        if not kws: continue
-        # Create a combined regex pattern (keyword1|keyword2|...)
-        pattern_str = "|".join([re.escape(str(k)) for k in kws])
-        pattern = re.compile(f"(?i)({pattern_str})") # (?i) makes it case-insensitive
-        topic_patterns.append((t["id"], pattern))
-
-    # B. The 'Scanner' function
-    @F.udf(returnType=T.ArrayType(T.StructType([
-        T.StructField("topic_id", T.StringType(), False),
-        T.StructField("term", T.StringType(), False)
-    ])))
-    def scan_for_keywords(text: str):
+    # A. Search Function
+    @F.udf(returnType="array<struct<topic_id:string, term:string>>")
+    def scanner(text):
         if not text: return []
-        results = []
-        for topic_id, regex in topic_patterns:
+        found_matches = []
+        for t in topics:
+            # Create a simple "OR" pattern: (word1|word2|...)
+            pattern = "|".join([re.escape(str(k)) for k in t["keywords"]])
+            regex = re.compile(f"(?i)({pattern})")
+            
+            # Find all matching words in the text
             if regex.search(text):
-                # If we find a match, record the topic and the specific word found
-                found_words = regex.findall(text)
-                for word in set([w.lower() for w in found_words]):
-                    results.append((topic_id, word))
-        return results
+                found_terms = regex.findall(text)
+                for word in set([w.lower() for w in found_terms]):
+                    found_matches.append((t["id"], word))
+        return found_matches
 
-    # C. Apply the scanner and create one row per topic match
-    matched_df = (
+    # B. Apply Scanner & Expand
+    # If a post matches 3 topics, we create 3 rows so each topic gets a count!
+    matched_results = (
         batch_df
-        .withColumn("matches", scan_for_keywords(F.col("text")))
-        .filter(F.size("matches") > 0)
-        .select("*", F.explode("matches").alias("match_info"))
-        .select(
-            "*", 
-            F.col("match_info.topic_id").alias("topic_id"),
-            F.col("match_info.term").alias("term")
-        )
-        .drop("matches", "match_info")
+        .withColumn("matches", scanner(F.col("text")))
+        .filter("size(matches) > 0")  # Only keep matches
+        .selectExpr("*", "explode(matches) as match")
+        .selectExpr("*", "match.topic_id", "match.term")
+        .drop("matches", "match")
     )
 
-    # D. Push the results to the 'matched' topic for Job 2 to pick up
-    (matched_df.select(F.to_json(F.struct("*")).alias("value"))
+    # C. Send to Matched Channel
+    (matched_results.select(F.to_json(F.struct("*")).alias("value"))
      .write.format("kafka")
-     .option("kafka.bootstrap.servers", KAFKA_SERVERS)
-     .option("topic", MATCHED_TOPIC)
+     .option("kafka.bootstrap.servers", KAFKA_URL)
+     .option("topic", MATCHED_DATA_OUT)
      .save())
 
-def main():
-    # 1. Initialize Spark
-    spark = SparkSession.builder.appName("TrendInsight-Streaming").getOrCreate()
-    log("Spark Session Started.")
+# =============================================================================
+# 5. MAIN PIPELINE
+# =============================================================================
 
-    # 2. Define the 'Shape' of a Reddit Post
-    post_schema = T.StructType([
-        T.StructField("event_id", T.StringType()),
-        T.StructField("subreddit", T.StringType()),
-        T.StructField("created_utc", T.StringType()),
-        T.StructField("text", T.StringType()),
-        T.StructField("score", T.IntegerType()),
-        T.StructField("num_comments", T.IntegerType()),
-    ])
-
-    # -------------------------------------------------------------------------
-    # PART A: THE MATCHER (Job 1)
-    # -------------------------------------------------------------------------
-    # Goal: Read raw posts -> Tag with Topic IDs -> Save
-    raw_posts_stream = (
+def start_pipeline():
+    spark = SparkSession.builder.appName("RedditMatchCounter").getOrCreate()
+    
+    # --- PHASE 1: READ & MATCH ---
+    # Listen to raw Reddit posts and call 'find_topic_matches'
+    raw_stream = (
         spark.readStream.format("kafka")
-        .option("kafka.bootstrap.servers", KAFKA_SERVERS)
-        .option("subscribe", f"{RAW_POSTS_TOPIC},{RAW_COMMENTS_TOPIC}")
+        .option("kafka.bootstrap.servers", KAFKA_URL)
+        .option("subscribe", f"{RAW_POSTS_DATA},{RAW_COMMENTS_DATA}")
         .option("startingOffsets", "earliest")
         .load()
-        .select(F.from_json(F.col("value").cast("string"), post_schema).alias("data"))
+        .select(F.from_json(F.col("value").cast("string"), POST_SCHEMA).alias("data"))
         .select("data.*")
     )
 
-    matcher_query = (
-        raw_posts_stream.writeStream
-        .foreachBatch(process_matching_batch)
-        .option("checkpointLocation", f"{CHECKPOINTS}/matched_v5")
+    matcher = (
+        raw_stream.writeStream
+        .foreachBatch(find_topic_matches)
+        .option("checkpointLocation", f"{CHECKPOINT_DIR}/mather_v1")
         .start()
     )
 
-    # -------------------------------------------------------------------------
-    # PART B: THE COUNTER (Job 2)
-    # -------------------------------------------------------------------------
-    # Goal: Read tagged matches -> Group by Day -> Calculate Mentions & Growth
-    matched_schema = post_schema.add("topic_id", T.StringType()).add("term", T.StringType())
-
-    daily_metrics_stream = (
+    # --- PHASE 2: AGGREGATE ---
+    # Read matches -> Group by Day -> Send to API
+    counter_stream = (
         spark.readStream.format("kafka")
-        .option("kafka.bootstrap.servers", KAFKA_SERVERS)
-        .option("subscribe", MATCHED_TOPIC)
+        .option("kafka.bootstrap.servers", KAFKA_URL)
+        .option("subscribe", MATCHED_DATA_OUT)
         .option("startingOffsets", "earliest")
         .load()
-        .select(F.from_json(F.col("value").cast("string"), matched_schema).alias("data"))
+        .select(F.from_json(F.col("value").cast("string"), MATCHED_SCHEMA).alias("data"))
         .select("data.*")
-        .withColumn("event_time", F.col("created_utc").cast("timestamp"))
-        .withWatermark("event_time", DATA_HISTORY_WINDOW)
         
-        # Avoid counting the same post twice (Deduplication)
+        # 1. Deduplicate: Don't count the same post twice!
         .dropDuplicates(["event_id", "topic_id"])
         
-        # Group data into 1-Day buckets
-        .groupBy("topic_id", F.window("event_time", "1 day").alias("time_window"))
+        # 2. Format Time
+        .withColumn("time", F.col("created_utc").cast("timestamp"))
+        .withWatermark("time", "35 days")
+        
+        # 3. Group by Day + Topic
+        .groupBy("topic_id", F.window("time", "1 day").alias("day"))
         .agg(
             F.count("*").alias("mentions"),
             F.sum(F.col("score") + F.coalesce(F.col("num_comments"), F.lit(0))).alias("engagement")
         )
         
-        # Prepare for output to the API
-        .select(
+        # 4. Prepare Final Format
+        .selectExpr(
             "topic_id", "mentions", "engagement",
-            F.col("time_window.start").alias("start"),
-            F.col("time_window.end").alias("end"),
-            F.lit("1d").alias("window_type")
+            "day.start as start", "day.end as end",
+            "'1d' as window_type"
         )
     )
 
-    metrics_query = (
-        daily_metrics_stream.select(F.to_json(F.struct("*")).alias("value"))
+    metrics_pusher = (
+        counter_stream.select(F.to_json(F.struct("*")).alias("value"))
         .writeStream.format("kafka")
-        .option("kafka.bootstrap.servers", KAFKA_SERVERS)
-        .option("topic", METRICS_TOPIC)
-        .option("checkpointLocation", f"{CHECKPOINTS}/metrics_v3")
+        .option("kafka.bootstrap.servers", KAFKA_URL)
+        .option("topic", FINAL_METRICS_OUT)
+        .option("checkpointLocation", f"{CHECKPOINT_DIR}/metrics_v1")
         .outputMode("update")
         .start()
     )
 
-    log("Both Jobs are active. Processing data...")
+    print("Pipeline started successfully.")
     spark.streams.awaitAnyTermination()
 
 if __name__ == "__main__":
-    main()
+    start_pipeline()
