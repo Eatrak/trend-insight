@@ -78,7 +78,17 @@ services:
     ports:
       - "7077:7077"
       - "8080:8080"
-    command: ["/opt/spark/bin/spark-class","org.apache.spark.deploy.master.Master","--host","spark-master","--port","7077","--webui-port","8080"]
+    command:
+      [
+        "/opt/spark/bin/spark-class",
+        "org.apache.spark.deploy.master.Master",
+        "--host",
+        "spark-master",
+        "--port",
+        "7077",
+        "--webui-port",
+        "8080",
+      ]
     volumes:
       - ./spark:/opt/spark-apps
 
@@ -93,7 +103,15 @@ services:
     volumes:
       - ./spark:/opt/spark-apps
       - spark_checkpoint:/checkpoints
-    command: ["/opt/spark/bin/spark-class","org.apache.spark.deploy.worker.Worker","spark://spark-master:7077","--webui-port","8081"]
+      - api_data:/data:ro
+    command:
+      [
+        "/opt/spark/bin/spark-class",
+        "org.apache.spark.deploy.worker.Worker",
+        "spark://spark-master:7077",
+        "--webui-port",
+        "8081",
+      ]
 
   spark-streaming:
     image: apache/spark:3.5.0
@@ -130,7 +148,6 @@ services:
       - REDDIT_LIMIT=100
     restart: unless-stopped
 
-
   api:
     build:
       context: ./services/api
@@ -150,9 +167,7 @@ services:
     volumes:
       - api_data:/data
 
-
 volumes:
   es_data:
   api_data:
   spark_checkpoint:
-

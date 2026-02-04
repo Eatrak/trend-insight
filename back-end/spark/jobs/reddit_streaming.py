@@ -3,7 +3,9 @@ import os
 import re
 import sqlite3
 import shutil
+import time
 from pyspark.sql import SparkSession, functions as F
+from pyspark.sql.types import ArrayType, StructType, StructField, StringType
 
 # =============================================================================
 # 1. SETTINGS
@@ -11,48 +13,80 @@ from pyspark.sql import SparkSession, functions as F
 KAFKA_URL         = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
 DATABASE_URL      = "/data/topics.db"
 CHECKPOINT_DIR    = "/checkpoints"
-
-# Output Channels
-INTERMEDIATE_TOPIC = "reddit.topic.matched.v2"
-DAILY_METRICS_OUT  = "reddit.topic.metrics"
-
-# Data Definitions
-POST_SCHEMA = "event_id STRING, created_utc STRING, text STRING, score INT, num_comments INT"
+DAILY_METRICS_OUT = "reddit.topic.metrics"
+POST_SCHEMA       = "event_id STRING, created_utc STRING, text STRING, score INT, num_comments INT"
 
 # =============================================================================
-# 2. HELPER: Get Keywords from DB
+# 2. INTELLIGENT SCANNER (Stateful UDF)
 # =============================================================================
 
-def get_topics_to_watch():
-    """Reads active topics and keywords from the database."""
-    if not os.path.exists(DATABASE_URL): return []
-    try:
-        shutil.copyfile(DATABASE_URL, "/tmp/topics.db")
-    except: pass
+# Global cache for workers
+_TOPIC_CACHE = {"regex": None, "lookup": {}, "last_updated": 0}
 
-    topics = []
-    with sqlite3.connect("/tmp/topics.db") as conn:
-        conn.row_factory = sqlite3.Row
-        try:
-            rows = conn.execute("SELECT id, keywords FROM topics WHERE is_active = 1").fetchall()
-            for r in rows:
-                raw = (r["keywords"] or "").strip()
-                kws = json.loads(raw) if raw.startswith("[") else [x.strip().lower() for x in raw.split(",") if x]
-                topics.append({"id": r["id"], "keywords": kws})
-        except Exception:
-            pass
-    return topics
-
-# =============================================================================
-# 3. MAIN PIPELINE
-# =============================================================================
+def get_topics_cached():
+    """Worker-side caching: Reloads DB only every 60 seconds."""
+    now = time.time()
+    if now - _TOPIC_CACHE["last_updated"] > 60:
+        if os.path.exists(DATABASE_URL):
+            try: shutil.copyfile(DATABASE_URL, "/tmp/topics_worker.db")
+            except: pass
+            
+            try:
+                lookup = {} # term -> [topic_ids]
+                all_terms = set()
+                
+                with sqlite3.connect("/tmp/topics_worker.db") as conn:
+                    conn.row_factory = sqlite3.Row
+                    rows = conn.execute("SELECT id, keywords FROM topics WHERE is_active = 1").fetchall()
+                    for r in rows:
+                        raw = (r["keywords"] or "").strip()
+                        kws = json.loads(raw) if raw.startswith("[") else [x.strip().lower() for x in raw.split(",") if x]
+                        for k in kws:
+                            if k not in lookup: lookup[k] = []
+                            lookup[k].append(r["id"])
+                            all_terms.add(k)
+                
+                # Verify we have terms before compiling
+                if all_terms:
+                    # Sort by length desc to match longest terms first (e.g. "new york" before "new")
+                    sorted_terms = sorted(list(all_terms), key=len, reverse=True)
+                    pattern = "|".join([re.escape(t) for t in sorted_terms])
+                    _TOPIC_CACHE["regex"] = re.compile(f"(?i)({pattern})")
+                else:
+                    _TOPIC_CACHE["regex"] = None
+                    
+                _TOPIC_CACHE["lookup"] = lookup
+                _TOPIC_CACHE["last_updated"] = now
+            except: pass
+            
+    return _TOPIC_CACHE
 
 def main():
-    spark = SparkSession.builder.appName("UnifiedStreamer").getOrCreate()
+    spark = SparkSession.builder.appName("SimpleStreamer").getOrCreate()
+
+    @F.udf(returnType="array<struct<topic_id:string, term:string>>")
+    def scan_text(text):
+        """Scans text using a single compiled RegeX (O(1) pass)."""
+        if not text: return []
+        
+        cache = get_topics_cached()
+        regex = cache["regex"]
+        lookup = cache["lookup"]
+        
+        if not regex: return []
+
+        matches = []
+        # Single Pass Scan
+        found_terms = set(regex.findall(text))
+        for term in found_terms:
+            lower_term = term.lower()
+            if lower_term in lookup:
+                for tid in lookup[lower_term]:
+                    matches.append((tid, lower_term))
+                    
+        return list(set(matches))
     
-    # --- STEP 1: Process Raw Data & Identify Initial Matches ---
-    # We use foreachBatch here to efficiently load topic configs once per batch.
-    
+    # 1. READ
     raw_stream = (
         spark.readStream.format("kafka")
         .option("kafka.bootstrap.servers", KAFKA_URL)
@@ -63,68 +97,17 @@ def main():
         .select("data.*")
     )
 
-    def match_logic(batch_df, batch_id):
-        topics = get_topics_to_watch()
-        if not topics: return
-
-        # Pre-compile regex patterns for efficiency
-        topic_configs = []
-        for t in topics:
-            regex = re.compile(f"(?i)({'|'.join([re.escape(str(k)) for k in t['keywords']])})")
-            topic_configs.append((t["id"], regex))
-            
-        @F.udf(returnType="array<struct<topic_id:string, term:string>>")
-        def scan_text(text):
-            if not text: return []
-            matches = []
-            for tid, regex in topic_configs:
-                if regex.search(text):
-                    # Find all unique matches
-                    found_terms = set(regex.findall(text))
-                    matches.extend([(tid, w) for w in found_terms])
-            return list(set(matches)) # Ensure uniqueness
-
-        # Apply scan and explode matches
-        tagged = (
-            batch_df.withColumn("matches", scan_text(F.col("text")))
-            .filter("size(matches) > 0")
-            .selectExpr("*", "explode(matches) as m")
-            .selectExpr("*", "m.topic_id", "m.term")
-            .drop("matches", "m")
-        )
+    # 2. MATCH & AGGREGATE
+    metrics_stream = (
+        raw_stream
+        # Transformation: Tag matching topics
+        .withColumn("matches", scan_text(F.col("text")))
+        .filter("size(matches) > 0")
+        .selectExpr("*", "explode(matches) as m")
+        .selectExpr("*", "m.topic_id", "m.term")
+        .drop("matches", "m")
         
-        # Write matches to intermediate internal topic
-        (tagged.select(F.to_json(F.struct("*")).alias("value"))
-         .write.format("kafka")
-         .option("kafka.bootstrap.servers", KAFKA_URL)
-         .option("topic", INTERMEDIATE_TOPIC)
-         .save())
-
-    # Start the Matcher Stream
-    spark.readStream.format("kafka") \
-        .option("kafka.bootstrap.servers", KAFKA_URL) \
-        .option("subscribe", "reddit.raw.posts,reddit.raw.comments") \
-        .option("startingOffsets", "earliest") \
-        .load() \
-        .select(F.from_json(F.col("value").cast("string"), POST_SCHEMA).alias("data")) \
-        .select("data.*") \
-        .writeStream \
-        .foreachBatch(match_logic) \
-        .option("checkpointLocation", f"{CHECKPOINT_DIR}/matcher_v2") \
-        .start()
-
-    # --- STEP 2: Aggregate Metrics (Daily Totals) ---
-    # Read from intermediate topic -> Deduplicate -> Aggregate
-    
-    matched_schema = f"{POST_SCHEMA}, topic_id STRING, term STRING"
-    
-    (spark.readStream.format("kafka")
-        .option("kafka.bootstrap.servers", KAFKA_URL)
-        .option("subscribe", INTERMEDIATE_TOPIC)
-        .option("startingOffsets", "earliest")
-        .load()
-        .select(F.from_json(F.col("value").cast("string"), matched_schema).alias("data"))
-        .select("data.*")
+        # Aggregation: Count per day
         .withColumn("time", F.col("created_utc").cast("timestamp"))
         .withWatermark("time", "35 days")
         .dropDuplicates(["event_id", "topic_id"])
@@ -138,16 +121,17 @@ def main():
             "day.start as start", "day.end as end",
             "'1d' as window_type"
         )
-        .select(F.to_json(F.struct("*")).alias("value"))
+    )
+
+    # 3. WRITE
+    (metrics_stream.select(F.to_json(F.struct("*")).alias("value"))
         .writeStream.format("kafka")
         .option("kafka.bootstrap.servers", KAFKA_URL)
         .option("topic", DAILY_METRICS_OUT)
-        .option("checkpointLocation", f"{CHECKPOINT_DIR}/metrics_v3")
+        .option("checkpointLocation", f"{CHECKPOINT_DIR}/metrics_simple_v3")
         .outputMode("update")
-        .start())
-
-    print("Spark Streaming Pipeline Started.")
-    spark.streams.awaitAnyTermination()
+        .start()
+        .awaitTermination())
 
 if __name__ == "__main__":
     main()
