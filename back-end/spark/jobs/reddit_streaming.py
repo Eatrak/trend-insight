@@ -35,7 +35,7 @@ def get_topics_cached():
     now = time.time()
     
     # 1. Check refresh interval
-    if now - _TOPIC_CACHE["last_updated"] > 10:
+    if now - _TOPIC_CACHE["last_updated"] > 2:
         try:
             # 2. Fetch from API
             # Timeout is critical. If API is slow, don't block the stream forever.
@@ -93,9 +93,13 @@ def get_topics_cached():
                     
                 _TOPIC_CACHE["topics"] = parsed_topics
                 _TOPIC_CACHE["last_updated"] = now
+                print(f"[Worker] Refreshed cache. Loaded {len(parsed_topics)} topics. Regex pattern length: {len(pattern) if pattern else 0}")
+            else:
+                print(f"[Worker] Failed to fetch topics. Status: {response.status_code}")
+
         except Exception as e:
             # Fail Open: If API is down, we just keep using the old cache.
-            # Only print/log if you have a logging framework setup
+            print(f"[Worker] Error fetching topics: {e}")
             pass
             
     return _TOPIC_CACHE
@@ -167,6 +171,7 @@ def main():
     )
 
     # TRANSFORM & AGGREGATE
+    # TRANSFORM (Stateless Filter & Map)
     metrics_stream = (
         raw_stream
         .withColumn("matches", scan_text(F.col("text")))
@@ -174,28 +179,30 @@ def main():
         .selectExpr("*", "explode(matches) as m")
         .selectExpr("*", "m.topic_id", "m.term")
         .drop("matches", "m")
-        .withColumn("time", F.col("created_utc").cast("timestamp"))
-        .withWatermark("time", "35 days")
-        .dropDuplicates(["event_id", "topic_id"])
-        .groupBy("topic_id", F.window("time", "1 day").alias("day"))
-        .agg(
-            F.count("*").alias("mentions"),
-            F.count("*").alias("engagement")  # Consistency: Engagement = Post Volume (Same as Mentions for now)
-        )
+        .withColumn("timestamp", F.col("created_utc").cast("timestamp"))
+        .withColumn("engagement", F.col("score") + F.col("num_comments") + 1)
         .selectExpr(
-            "topic_id", "mentions", "engagement",
-            "day.start as start", "day.end as end",
-            "'1d' as window_type"
+            "topic_id", 
+            "event_id", 
+            "created_utc",
+            "timestamp", 
+            "text", 
+            "score", 
+            "num_comments", 
+            "engagement",
+            "'matched_post' as event_type"
         )
     )
 
     # WRITE TO KAFKA
+    # We output to a new topic "reddit.topic.matches.v2"
+    # This topic will be consumed by Logstash to UPSERT into Elasticsearch.
     (metrics_stream.select(F.to_json(F.struct("*")).alias("value"))
         .writeStream.format("kafka")
         .option("kafka.bootstrap.servers", KAFKA_URL)
-        .option("topic", DAILY_METRICS_OUT)
-        .option("checkpointLocation", f"{CHECKPOINT_DIR}/metrics_simple_v3")
-        .outputMode("update")
+        .option("topic", "reddit.topic.matches.v2")
+        .option("checkpointLocation", f"{CHECKPOINT_DIR}/matches_granular_v1")
+        .outputMode("append")
         .start()
         .awaitTermination())
 

@@ -122,6 +122,82 @@ const connectProducer = async () => {
 connectProducer();
 
 // ----------------------------------------------------------------------------
+// Auto-Sync Scheduler (Every 2 Minutes)
+// ----------------------------------------------------------------------------
+async function startAutoBackfillScheduler() {
+  console.log("[Auto-Sync] Scheduler started (Interval: 2 minutes)");
+
+  // Initial delay to let everything settle
+  await new Promise((resolve) => setTimeout(resolve, 30000));
+
+  setInterval(
+    async () => {
+      try {
+        console.log("[Auto-Sync] Triggering auto-sync for active topics...");
+        // 1. Get all active topics
+        const stmt = db.prepare("SELECT * FROM topics WHERE is_active = 1");
+        const topics = stmt.all() as any[];
+
+        if (topics.length === 0) {
+          console.log("[Auto-Sync] No active topics found.");
+          return;
+        }
+
+        const allowedSubreddits = (process.env.REDDIT_SUBREDDITS || "")
+          .split(",")
+          .map((s) => s.trim())
+          .filter((s) => s.length > 0);
+
+        // 2. Queue backfill task for each topic
+        for (const topic of topics) {
+          // Skip if manual backfill is currently running to avoid conflicts
+          if (topic.backfill_status === "PENDING") {
+            console.log(
+              `[Auto-Sync] Skipping ${topic.id} (Manual Backfill in progress)`,
+            );
+            continue;
+          }
+
+          const message = {
+            topic_id: topic.id,
+            subreddits: allowedSubreddits,
+            lookback_seconds: 48 * 60 * 60, // 48 Hours
+          };
+
+          // We do NOT update the DB status to 'PENDING' here to avoid blocking the UI status.
+          // The ingestion service will process it purely in the background.
+          // However, the ingestion service DOES update status to PENDING/COMPLETED.
+          // To avoid UI flicker, we might want to check how ingestion handles it.
+          // Looking at ingestion service:
+          // callback: await axios.patch(... status: "COMPLETED" ...)
+          // This effectively "resets" the status.
+          // If the user triggers manual backfill, it sets PENDING.
+          // If auto-sync runs, it sends a task. Ingestion processes it.
+          // Ingestion updates status to PENDING (step 2? no request from api does that).
+          // Wait, ingestion service DOES send patch updates for progress.
+          // This might interfere with UI if the user thinks it's "idle".
+          // But the user requested "auto sync".
+          // Let's proceed: The ingestion updates will happen.
+          // Ideally we might want a separate "auto-sync" status or just let it be.
+
+          await producer.send({
+            topic: "reddit.tasks.backfill",
+            messages: [{ value: JSON.stringify(message) }],
+          });
+
+          console.log(`[Auto-Sync] Queued sync for ${topic.id}`);
+        }
+      } catch (error: any) {
+        console.error("[Auto-Sync] Error:", error.message);
+      }
+    },
+    2 * 60 * 1000,
+  ); // 2 Minutes
+}
+
+startAutoBackfillScheduler();
+
+// ----------------------------------------------------------------------------
 // Storage: Elasticsearch (Metrics, Trends)
 // ----------------------------------------------------------------------------
 const esClient = new Client({
@@ -303,48 +379,49 @@ app.get("/topics/:id/report", async (req: Request, res: Response) => {
   try {
     const topicId = req.params.id;
 
-    // Use Aggregations to deduplicate streaming updates
-    // Group by: window_type -> start time -> max(mentions) or latest record
-    // Simplified query: Fetch all 1d metrics for this topic
-    // Since Spark now only outputs 1d 'data bricks', we perform 7d/30d aggregation here.
+    // AGGREGATION QUERY (ES Upsert Architecture)
+    // We query the granular index where each document is a unique post (deduplicated by upsert).
+    // We simply sum the engagement stats for each day.
     const result = await esClient.search({
-      index: "reddit-topic-metrics*",
-      size: 0,
+      index: "reddit-topic-granular", // New index
+      size: 0, // No hits, just aggs
       query: {
         bool: {
-          must: [
-            { term: { "topic_id.keyword": topicId } },
-            { term: { "window_type.keyword": "1d" } },
-          ],
+          must: [{ term: { "topic_id.keyword": topicId } }],
         },
       },
       aggs: {
-        by_start_time: {
+        daily_buckets: {
           date_histogram: {
-            field: "start",
-            fixed_interval: "1d",
+            field: "@timestamp", // Logstash maps created_utc/timestamp to @timestamp
+            calendar_interval: "1d",
             order: { _key: "asc" },
+            min_doc_count: 0, // Ensure we see empty days if we want continuous lines? Actually 0 is safer to skip for sparse data
+            extended_bounds: {
+              min: "now-30d/d",
+              max: "now/d",
+            },
           },
           aggs: {
-            latest_update: {
-              top_hits: {
-                size: 1,
-                sort: [{ mentions: { order: "desc", unmapped_type: "long" } }],
-              },
-            },
+            total_engagement: { sum: { field: "engagement" } }, // Sum of (score + comments + 1)
           },
         },
       },
     });
 
     const dailyMetrics: any[] = [];
-    const buckets = (result.aggregations as any)?.by_start_time?.buckets || [];
+    const buckets = (result.aggregations as any)?.daily_buckets?.buckets || [];
 
     for (const bucket of buckets) {
-      const hit = bucket.latest_update.hits.hits[0];
-      if (hit) {
-        dailyMetrics.push(hit._source);
-      }
+      // Convert bucket to Metric format
+      dailyMetrics.push({
+        topic_id: topicId,
+        start: bucket.key_as_string,
+        end: new Date(bucket.key + 86400000).toISOString(), // Approx end of day
+        mentions: bucket.doc_count,
+        engagement: bucket.total_engagement.value,
+        window_type: "1d",
+      });
     }
 
     // --- Synthesis: 1d -> 1w, 1m ---

@@ -82,6 +82,11 @@ async function startRealTimeIngestion() {
  * Worker to handle historical backfill requests.
  */
 async function startBackfilling() {
+  console.log(
+    "[backfill] Starting worker. Waiting 3s for system stabilization...",
+  );
+  await Utils.sleep(3000);
+
   const consumer = kafka.consumer({
     groupId: "ingestion-backfill-worker",
     // 2 mins. How long Kafka is willing to wait before it gives up on the worker.
@@ -118,17 +123,11 @@ async function startBackfilling() {
           if (!rawValue) continue;
 
           const payload = JSON.parse(rawValue);
-          const { topic_id, subreddits = [] } = payload;
+          const { topic_id, subreddits = [], lookback_seconds } = payload;
 
           console.log(
-            `[backfill] Topic: ${topic_id} | Subreddits: ${subreddits.join(", ")}`,
+            `[backfill] Topic: ${topic_id} | Subreddits: ${subreddits.join(", ")} | Lookback: ${lookback_seconds || "default"}s`,
           );
-
-          // Warm-up Delay: Wait 15s to ensure Spark workers (10s cache TTL) pick up the new topic
-          console.log(
-            `[backfill] Waiting 15s for Spark to sync topic cache...`,
-          );
-          await Utils.sleep(15000);
 
           // If no subreddits are provided, mark the task as completed immediately
           if (!Array.isArray(subreddits) || !subreddits.length) {
@@ -162,9 +161,9 @@ async function startBackfilling() {
           }
           console.log(`[backfill] Topic: ${topic_id}, Search Query: ${query}`);
 
-          // Backfill constraints: limit total posts and look back 30 days
+          // Backfill constraints: limit total posts and look back 30 days default
           const MAX_FETCH_LIMIT = 20000;
-          const LOOKBACK_SECONDS = 30 * 24 * 3600;
+          const LOOKBACK_SECONDS = lookback_seconds || 30 * 24 * 3600;
           const cutoff = dayjs().unix() - LOOKBACK_SECONDS;
 
           // Limit subreddits to 30 per search to avoid "URI Too Long" or 502 errors from Reddit
@@ -252,7 +251,7 @@ async function startBackfilling() {
               );
 
               // Rate limiting: sleep between pagination requests
-              await Utils.sleep(1500);
+              await Utils.sleep(1000);
             } catch (error: any) {
               console.error(
                 `[backfill] Error in batch for ${topic_id}:`,
