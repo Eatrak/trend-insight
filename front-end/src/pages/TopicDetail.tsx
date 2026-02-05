@@ -367,6 +367,67 @@ export default function TopicDetail() {
 
           <Card className="col-span-1">
             <CardHeader>
+              <CardTitle>
+                Engagement - Total{" "}
+                {metrics
+                  .filter(
+                    (m) =>
+                      m.window_type === "1d" &&
+                      new Date(m.start).getTime() >= rangeCutoff.getTime() &&
+                      new Date(m.start).getTime() < now.getTime(),
+                  )
+                  .reduce((acc, curr) => acc + (curr.engagement || 0), 0)}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="pl-2">
+              <div className="h-[300px] w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={chartData}>
+                    <XAxis
+                      dataKey="end"
+                      tickFormatter={(val) => format(new Date(val), "MMM d")}
+                      stroke="#888888"
+                      fontSize={12}
+                      tickLine={false}
+                      axisLine={false}
+                    />
+                    <YAxis
+                      stroke="#888888"
+                      fontSize={12}
+                      tickLine={false}
+                      axisLine={false}
+                      tickFormatter={(value) => `${value}`}
+                    />
+                    <CartesianGrid
+                      strokeDasharray="3 3"
+                      vertical={false}
+                      stroke="hsl(var(--border))"
+                    />
+                    <Tooltip
+                      cursor={{ fill: "hsl(var(--muted)/0.4)" }}
+                      contentStyle={{
+                        backgroundColor: "hsl(var(--card))",
+                        borderColor: "hsl(var(--border))",
+                      }}
+                      itemStyle={{ color: "hsl(var(--foreground))" }}
+                      labelFormatter={(label) =>
+                        format(new Date(label), "PP p")
+                      }
+                    />
+                    <Bar
+                      dataKey="engagement"
+                      fill="hsl(var(--secondary))"
+                      radius={[4, 4, 0, 0]}
+                      name="Engagement"
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="col-span-1">
+            <CardHeader>
               <CardTitle>Growth</CardTitle>
             </CardHeader>
             <CardContent className="pl-2">
