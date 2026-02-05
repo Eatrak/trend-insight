@@ -344,7 +344,7 @@ export default function TopicDetail() {
                       stroke="hsl(var(--border))"
                     />
                     <Tooltip
-                      cursor={{ fill: "hsl(var(--muted)/0.4)" }}
+                      cursor={false}
                       contentStyle={{
                         backgroundColor: "hsl(var(--card))",
                         borderColor: "hsl(var(--border))",
@@ -356,8 +356,12 @@ export default function TopicDetail() {
                     />
                     <Bar
                       dataKey="mentions"
-                      fill="hsl(var(--primary))"
+                      fill="var(--chart-1)"
                       radius={[4, 4, 0, 0]}
+                      activeBar={{
+                        stroke: "var(--foreground)",
+                        strokeWidth: 2,
+                      }}
                     />
                   </BarChart>
                 </ResponsiveContainer>
@@ -404,7 +408,7 @@ export default function TopicDetail() {
                       stroke="hsl(var(--border))"
                     />
                     <Tooltip
-                      cursor={{ fill: "hsl(var(--muted)/0.4)" }}
+                      cursor={false}
                       contentStyle={{
                         backgroundColor: "hsl(var(--card))",
                         borderColor: "hsl(var(--border))",
@@ -416,9 +420,13 @@ export default function TopicDetail() {
                     />
                     <Bar
                       dataKey="engagement"
-                      fill="hsl(var(--secondary))"
+                      fill="var(--chart-1)"
                       radius={[4, 4, 0, 0]}
                       name="Engagement"
+                      activeBar={{
+                        stroke: "var(--foreground)",
+                        strokeWidth: 2,
+                      }}
                     />
                   </BarChart>
                 </ResponsiveContainer>
@@ -475,7 +483,7 @@ export default function TopicDetail() {
                       type="monotone"
                       dataKey="growth"
                       name="Growth"
-                      stroke="#8884d8"
+                      stroke="var(--chart-1)"
                       strokeWidth={2}
                       dot={{ strokeWidth: 2, r: 4 }}
                       activeDot={{ r: 6 }}
