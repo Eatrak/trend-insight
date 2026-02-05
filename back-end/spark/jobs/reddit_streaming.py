@@ -127,18 +127,25 @@ def main():
 
         matches = []
         
-        # Logic Check: For each topic, ALL groups must have AT LEAST ONE match
+        # Logic Check: "AND of ORs" (Conjunctive Normal Form - CNF)
+        # For a topic to match, ALL of its rule groups (AND) must be satisfied.
+        # A rule group is satisfied if AT LEAST ONE of its terms (OR) is present in the text.
         for topic in topics:
             is_match = True
             matched_term_blob = []
             
-            for group in topic["groups"]:
-                # Check intersection (Any term in group is in found_terms)
-                group_matches = [t for t in group if t in found_terms]
+            for group_terms in topic["groups"]:
+                # Check Intersection: Does the set of found_terms overlap with this group's terms?
+                # This implements the "OR" logic within the group.
+                # If group_terms = ["rust", "rs"], we match if we found "rust" OR "rs".
+                group_matches = [t for t in group_terms if t in found_terms]
+                
                 if not group_matches:
+                    # If any single group fails to match, the whole topic fails (AND logic).
                     is_match = False
                     break
-                # We can store the first match of the group as evidence
+                
+                # Store evidence of the match for this group
                 matched_term_blob.append(group_matches[0])
             
             if is_match:
