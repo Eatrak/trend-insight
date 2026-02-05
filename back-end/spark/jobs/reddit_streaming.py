@@ -159,7 +159,7 @@ def main():
     raw_stream = (
         spark.readStream.format("kafka")
         .option("kafka.bootstrap.servers", KAFKA_URL)
-        .option("subscribe", "reddit.raw.posts,reddit.raw.comments")
+        .option("subscribe", "reddit.raw.posts")  # User Request: Ignore comments for strict consistency
         .option("startingOffsets", "earliest")
         .load()
         .select(F.from_json(F.col("value").cast("string"), POST_SCHEMA).alias("data"))
@@ -180,7 +180,7 @@ def main():
         .groupBy("topic_id", F.window("time", "1 day").alias("day"))
         .agg(
             F.count("*").alias("mentions"),
-            F.count("*").alias("engagement")  # User Request: Engagement = 1 per matching Post/Comment (Volume)
+            F.count("*").alias("engagement")  # Consistency: Engagement = Post Volume (Same as Mentions for now)
         )
         .selectExpr(
             "topic_id", "mentions", "engagement",
