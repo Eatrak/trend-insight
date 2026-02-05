@@ -236,30 +236,29 @@ export default function TopicDetail() {
           </div>
         </div>
 
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {/* Keywords Display */}
           {Array.isArray(topic.keywords[0]) ? (
             // CNF Logic: Groups of ORs, connected by AND
-            <div className="flex flex-wrap items-center gap-3">
+            <div className="flex flex-wrap items-center gap-2">
               {(topic.keywords as string[][]).map((group, i) => (
-                <div
-                  key={i}
-                  className="flex items-center gap-2 p-1.5 rounded-lg border border-dashed bg-white/50"
-                >
-                  {group.map((k, j) => (
-                    <div key={k} className="flex items-center">
-                      {j > 0 && (
-                        <span className="text-[10px] uppercase font-bold text-muted-foreground mr-1">
-                          OR
+                <div key={i} className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-y-2 p-2 rounded-lg border border-dashed border-primary/20 bg-primary/5">
+                    {group.map((k, j) => (
+                      <div key={k} className="flex items-center">
+                        {j > 0 && (
+                          <span className="text-[10px] uppercase font-bold text-muted-foreground mx-2">
+                            OR
+                          </span>
+                        )}
+                        <span className="inline-flex items-center rounded-md bg-orange-50 px-3 py-1 text-sm font-medium text-orange-700 ring-1 ring-inset ring-orange-700/10 shadow-sm">
+                          {k}
                         </span>
-                      )}
-                      <span className="inline-flex items-center rounded-md bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700 ring-1 ring-inset ring-blue-700/10">
-                        {k}
-                      </span>
-                    </div>
-                  ))}
+                      </div>
+                    ))}
+                  </div>
                   {i < (topic.keywords as string[][]).length - 1 && (
-                    <span className="bg-muted px-2 py-0.5 rounded-full text-[10px] font-bold text-muted-foreground uppercase tracking-widest border">
+                    <span className="text-[10px] uppercase font-bold text-muted-foreground mx-1">
                       AND
                     </span>
                   )}
@@ -280,7 +279,7 @@ export default function TopicDetail() {
           {topic.subreddits.map((s) => (
             <span
               key={s}
-              className="inline-flex items-center rounded-md bg-orange-50 px-2 py-1 text-xs font-medium text-orange-700 ring-1 ring-inset ring-orange-700/10"
+              className="inline-flex items-center rounded-md bg-blue-100 px-3 py-1 text-sm font-medium text-blue-900 shadow-sm ring-1 ring-inset ring-blue-900/10"
             >
               r/{s}
             </span>
