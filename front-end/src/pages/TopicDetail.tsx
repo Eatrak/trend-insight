@@ -237,14 +237,46 @@ export default function TopicDetail() {
         </div>
 
         <div className="flex flex-wrap gap-2">
-          {topic.keywords.map((k) => (
-            <span
-              key={k}
-              className="inline-flex items-center rounded-md bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700 ring-1 ring-inset ring-blue-700/10"
-            >
-              {k}
-            </span>
-          ))}
+          {/* Keywords Display */}
+          {Array.isArray(topic.keywords[0]) ? (
+            // CNF Logic: Groups of ORs, connected by AND
+            <div className="flex flex-wrap items-center gap-3">
+              {(topic.keywords as string[][]).map((group, i) => (
+                <div
+                  key={i}
+                  className="flex items-center gap-2 p-1.5 rounded-lg border border-dashed bg-white/50"
+                >
+                  {group.map((k, j) => (
+                    <div key={k} className="flex items-center">
+                      {j > 0 && (
+                        <span className="text-[10px] uppercase font-bold text-muted-foreground mr-1">
+                          OR
+                        </span>
+                      )}
+                      <span className="inline-flex items-center rounded-md bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700 ring-1 ring-inset ring-blue-700/10">
+                        {k}
+                      </span>
+                    </div>
+                  ))}
+                  {i < (topic.keywords as string[][]).length - 1 && (
+                    <span className="bg-muted px-2 py-0.5 rounded-full text-[10px] font-bold text-muted-foreground uppercase tracking-widest border">
+                      AND
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : (
+            // Legacy Flat List
+            (topic.keywords as string[]).map((k) => (
+              <span
+                key={k}
+                className="inline-flex items-center rounded-md bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700 ring-1 ring-inset ring-blue-700/10"
+              >
+                {k}
+              </span>
+            ))
+          )}
           {topic.subreddits.map((s) => (
             <span
               key={s}

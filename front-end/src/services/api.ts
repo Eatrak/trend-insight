@@ -11,7 +11,7 @@ export interface Filter {
 export interface Topic {
   id: string;
   description: string;
-  keywords: string[];
+  keywords: string[] | string[][];
   subreddits: string[];
   filters: Filter;
   update_frequency_seconds: number;
