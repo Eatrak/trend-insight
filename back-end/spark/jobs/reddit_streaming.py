@@ -180,7 +180,7 @@ def main():
         .groupBy("topic_id", F.window("time", "1 day").alias("day"))
         .agg(
             F.count("*").alias("mentions"),
-            F.sum(F.col("score") + F.coalesce(F.col("num_comments"), F.lit(0))).alias("engagement")
+            F.count("*").alias("engagement")  # User Request: Engagement = 1 per matching Post/Comment (Volume)
         )
         .selectExpr(
             "topic_id", "mentions", "engagement",
