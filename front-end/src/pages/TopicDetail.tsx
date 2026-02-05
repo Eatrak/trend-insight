@@ -62,6 +62,16 @@ export default function TopicDetail() {
     }
   }, [id]);
 
+  // Auto-adjust range if it's too small for the selected window
+  useEffect(() => {
+    if (selectedWindow === "1w" && selectedRange < 14) {
+      setSelectedRange(30); // Default to 30d for weekly view
+    }
+    if (selectedWindow === "1m" && selectedRange < 60) {
+      setSelectedRange(90); // Default to 90d for monthly view
+    }
+  }, [selectedWindow, selectedRange]);
+
   // Always poll every 5s
   useInterval(refreshData, 5000);
 
