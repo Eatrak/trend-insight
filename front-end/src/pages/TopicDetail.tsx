@@ -104,23 +104,31 @@ export default function TopicDetail() {
 
   // Filter and Time Range (Zoom)
   const now = new Date();
-  const rangeCutoff = new Date(
-    now.getTime() - selectedRange * 24 * 60 * 60 * 1000,
-  );
+
+  // Align to Midnight for strict day boundaries
+  const todayMidnight = new Date(now);
+  todayMidnight.setHours(0, 0, 0, 0);
+
+  // Range Cutoff = Midnight Today - (N-1) Days
+  // E.g. 7d -> Today + 6 past days = 7 bars
+  const rangeCutoff = new Date(todayMidnight);
+  rangeCutoff.setDate(todayMidnight.getDate() - (selectedRange - 1));
 
   // 2. Generate Complete Timeline (Zero-Filling)
   // We align chart points to the known metrics for accuracy, filling gaps with 0.
   const chartData = [];
   let runner = rangeCutoff.getTime();
-  const endTime = now.getTime();
+  const endTime = todayMidnight.getTime();
 
   while (runner <= endTime) {
-    // Find a metric that specifically covers this runner time.
-    // Metric 'start' and 'end' define the bucket.
+    // Correct Matching Logic: Does the Metric belong to this Bar?
+    // Bar Interval: [runner, runner + stepMs)
+    // Metric Point: mStart
+    // We match if the Metric started within this bar's timeframe.
+    // This handles Timezone offsets (e.g. Metric 01:00 belongs to Bar 00:00).
     const match = filteredMetrics.find((m) => {
       const mStart = new Date(m.start).getTime();
-      const mEnd = new Date(m.end).getTime();
-      return runner >= mStart && runner < mEnd;
+      return mStart >= runner && mStart < runner + stepMs;
     });
 
     chartData.push({
@@ -305,7 +313,14 @@ export default function TopicDetail() {
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">
-                {chartData.reduce((acc, curr) => acc + curr.mentions, 0)}
+                {metrics
+                  .filter(
+                    (m) =>
+                      m.window_type === "1d" &&
+                      new Date(m.start).getTime() >= rangeCutoff.getTime() &&
+                      new Date(m.start).getTime() < now.getTime(),
+                  )
+                  .reduce((acc, curr) => acc + (curr.mentions || 0), 0)}
               </div>
             </CardContent>
           </Card>
@@ -317,7 +332,14 @@ export default function TopicDetail() {
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">
-                {chartData.reduce((acc, curr) => acc + curr.engagement, 0)}
+                {metrics
+                  .filter(
+                    (m) =>
+                      m.window_type === "1d" &&
+                      new Date(m.start).getTime() >= rangeCutoff.getTime() &&
+                      new Date(m.start).getTime() < now.getTime(),
+                  )
+                  .reduce((acc, curr) => acc + (curr.engagement || 0), 0)}
               </div>
             </CardContent>
           </Card>
@@ -328,8 +350,13 @@ export default function TopicDetail() {
             <CardContent>
               <div className="text-2xl font-bold">
                 {
-                  chartData.filter((d) => d.mentions > 0 || d.engagement > 0)
-                    .length
+                  metrics.filter(
+                    (m) =>
+                      m.window_type === "1d" &&
+                      new Date(m.start).getTime() >= rangeCutoff.getTime() &&
+                      new Date(m.start).getTime() < now.getTime() &&
+                      (m.mentions > 0 || m.engagement > 0),
+                  ).length
                 }
               </div>
             </CardContent>
