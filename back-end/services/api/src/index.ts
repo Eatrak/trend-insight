@@ -491,7 +491,10 @@ app.post("/generate-config", async (req: Request, res: Response) => {
           content: `You are a configuration generator for a trend monitoring tool.
           Based on the user description, extract a JSON object with:
           - id: a strictly kebab-case identifier (max 30 chars).
-          - keywords: array of 3-10 relevant keywords/phrases.
+          - keywords: A LIST OF LISTS of strings (CNF Logic).
+             - Outer List = AND (All groups must match)
+             - Inner List = OR (At least one term in the group must match)
+             - Example: [["rust", "rs"], ["job", "hiring"]] -> (rust OR rs) AND (job OR hiring).
           - subreddits: array of 3-5 relevant subreddits selected ONLY from the provided allowed list.
           - description: a polished version of the user's description.
 

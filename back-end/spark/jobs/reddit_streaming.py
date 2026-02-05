@@ -23,7 +23,7 @@ POST_SCHEMA       = "event_id STRING, created_utc STRING, text STRING, score INT
 
 # Global cache for workers. Spark recycles Python worker processes, so this global
 # persists across multiple tasks/micro-batches processed by the same worker.
-_TOPIC_CACHE = {"regex": None, "lookup": {}, "last_updated": 0}
+_TOPIC_CACHE = {"regex": None, "topics": [], "last_updated": 0}
 
 def get_topics_cached():
     """
@@ -44,7 +44,7 @@ def get_topics_cached():
             if response.status_code == 200:
                 topics_list = response.json()
                 
-                lookup = {} # Mapping: "keyword" -> [Topic ID 1, Topic ID 2]
+                parsed_topics = []
                 all_terms = set()
                 
                 for r in topics_list:
@@ -52,13 +52,33 @@ def get_topics_cached():
                     if not r.get("is_active", True):
                         continue
                         
-                    # API returns keywords as a list of strings
-                    kws = [str(x).strip().lower() for x in r.get("keywords", []) if x]
+                    raw_keywords = r.get("keywords")
                     
-                    # Build the lookup table
-                    for k in kws:
-                        lookup.setdefault(k, []).append(r["id"])
-                        all_terms.add(k)
+                    # Normalized Structure: List of Lists of Strings (CNF)
+                    # [[A, B], [C]] -> (A OR B) AND (C)
+                    groups = []
+                    
+                    if isinstance(raw_keywords, list):
+                        if not raw_keywords: continue # Empty list
+                        
+                        # Strict New Structure: List[List[str]] i.e. CNF
+                        # We assume the API strictly returns list of lists.
+                        groups = []
+                        for g in raw_keywords:
+                            if isinstance(g, list):
+                                groups.append([str(x).strip().lower() for x in g])
+                    
+                    if not groups: continue
+
+                    # Collect terms for global regex
+                    for g in groups:
+                        for term in g:
+                            all_terms.add(term)
+                            
+                    parsed_topics.append({
+                        "id": r["id"],
+                        "groups": groups
+                    })
                 
                 # 3. Compile Regex
                 if all_terms:
@@ -71,7 +91,7 @@ def get_topics_cached():
                 else:
                     _TOPIC_CACHE["regex"] = None
                     
-                _TOPIC_CACHE["lookup"] = lookup
+                _TOPIC_CACHE["topics"] = parsed_topics
                 _TOPIC_CACHE["last_updated"] = now
         except Exception as e:
             # Fail Open: If API is down, we just keep using the old cache.
@@ -95,19 +115,36 @@ def main():
         # Retrieve the cached regex/lookup table (lazy loading)
         cache = get_topics_cached()
         regex = cache["regex"]
-        lookup = cache["lookup"]
+        topics = cache["topics"]
         
         if not regex: return []
 
-        matches = []
         # Single Pass Scan: regex.findall returns all non-overlapping matches
-        found_terms = set(regex.findall(text))
+        # We need a SET of present terms to check against logical groups
+        found_terms = set(term.lower() for term in regex.findall(text))
         
-        for term in found_terms:
-            lower_term = term.lower()
-            if lower_term in lookup:
-                for tid in lookup[lower_term]:
-                    matches.append((tid, lower_term))
+        if not found_terms: return []
+
+        matches = []
+        
+        # Logic Check: For each topic, ALL groups must have AT LEAST ONE match
+        for topic in topics:
+            is_match = True
+            matched_term_blob = []
+            
+            for group in topic["groups"]:
+                # Check intersection (Any term in group is in found_terms)
+                group_matches = [t for t in group if t in found_terms]
+                if not group_matches:
+                    is_match = False
+                    break
+                # We can store the first match of the group as evidence
+                matched_term_blob.append(group_matches[0])
+            
+            if is_match:
+                # Return one record per matched topic. 
+                # 'term' is less relevant in CNF, passing the first matched term as representative
+                matches.append((topic["id"], matched_term_blob[0]))
                     
         return matches
     
