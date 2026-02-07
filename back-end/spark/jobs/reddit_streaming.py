@@ -14,8 +14,7 @@ API_TOPICS_URL    = os.getenv("API_TOPICS_URL", "http://trend-api:8000/topics")
 # Checkpoint Directory: Critical for Structured Streaming fault tolerance.
 CHECKPOINT_DIR    = "/checkpoints"
 
-# Output Topic: Where we send the calculated metrics.
-DAILY_METRICS_OUT = "reddit.topic.metrics"
+
 
 # Input Schema: Defines the structure of the JSON data coming from Reddit.
 POST_SCHEMA       = "event_id STRING, created_utc STRING, text STRING, score INT, num_comments INT"
@@ -195,13 +194,12 @@ def main():
     )
 
     # WRITE TO KAFKA
-    # We output to a new topic "reddit.topic.matches.v2"
     # This topic will be consumed by Logstash to UPSERT into Elasticsearch.
     (metrics_stream.select(F.to_json(F.struct("*")).alias("value"))
         .writeStream.format("kafka")
         .option("kafka.bootstrap.servers", KAFKA_URL)
-        .option("topic", "reddit.topic.matches.v2")
-        .option("checkpointLocation", f"{CHECKPOINT_DIR}/matches_granular_v1")
+        .option("topic", "reddit.topic.matches")
+        .option("checkpointLocation", f"{CHECKPOINT_DIR}/matches_granular")
         .outputMode("append")
         .start()
         .awaitTermination())
