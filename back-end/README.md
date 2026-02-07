@@ -1,352 +1,120 @@
-# Trend Insight – Complete Backend Technical Specification
+# Trend Insight Backend
 
-## Document Purpose
+A high-performance, real-time data pipeline for tracking and analyzing Reddit trends. This system ingests data from Reddit, processes it using Spark Structured Streaming for topic detection, and visualizes insights via an API and Elasticsearch.
 
-This document is a **complete, implementation-grade technical specification** for the Trend Insight backend system.
+![Trend Insight App](../images/app.png)
 
-The document is suitable for:
+## 🌟 Why Trend Insight?
 
-* full backend implementation
-* academic evaluation (TAP / distributed systems)
-* architectural justification of Kafka + Spark
+In a world where social media trends move at light speed, understanding what is being discussed and how fast it's growing is very useful.
 
-This specification intentionally avoids runtime LLM dependency for analytics logic.
+### ⚡️ Real-Time Detection
 
----
+Trend Insight uses **Spark Structured Streaming** to detect detailed topics the moment they are mentioned.
 
-## Part I – Functional Requirements
+### 🎯 Precision via CNF Logic
 
-### 1. Purpose of the System
+Simple keyword matching is often inaccurate. We use **Conjunctive Normal Form (CNF)** logic (e.g., `(crypto OR bitcoin) AND (crash OR dip)`), ensuring high-quality signals.
 
-Trend Insight is a backend-heavy, near–real-time data processing platform designed to ingest, process, and analyze **high-volume, fast-changing Reddit data**.
+### ⏳ Historical Backfilling
 
-The system focuses on:
+Trend Insight uses a **dual-mode ingestion** to allow you to instantly backfill historical data up to 1 month for any new topic, giving you immediate insights.
 
-* topic tracking
-* trend detection
-* statistical and sentiment analysis
+### 📈 Metrics
 
-All core intelligence is **deterministic and statistical**, not AI-driven at runtime.
+The system calculates for each topic the various metrics along the timeline:
 
-Apache Kafka and Apache Spark are **mandatory architectural components**, justified by:
+- the number of related posts
+- the engagement (posts + upvotes + comments)
+- the growth rate of the topic
 
-* high ingestion rate
-* stream processing requirements
-* stateful windowed analytics
-* horizontal scalability
+### 🤖 AI-Powered Configuration
 
----
+The system uses **OpenAI** to translate natural language descriptions into precise topic rules, so that the creation of a topic is fast and easy.
 
-### 2. Core Functional Features
+## 🏗 Architecture
 
-The system delivers value via **two independent insight mechanisms**.
+<img src="../images/architecture.png" alt="Trend Insight Architecture" height="700">
 
-#### 2.1 User-Defined Topic Insights
+## 🚀 Services Overview
 
-Users define topics using **natural language descriptions**. These descriptions are converted (offline or asynchronously) into a structured topic configuration used by Spark.
+### 1. **Ingestion Service** (`node-ts`)
 
-**Topic Configuration Model**
+- **Role**: Continuously polls Reddit for new posts in monitored subreddits.
+- **Features**:
+  - Real-time polling with deduplication.
+  - Handles historical backfill requests triggered by the API.
+- **Key Config**: `REDDIT_POLL_INTERVAL_SECONDS`, `REDDIT_LIMIT`.
 
-* topic_id (UUID)
-* description (free text)
-* keyword_groups (array of arrays)
-* allowed_subreddits (array)
-* filters:
+### 2. **Spark Streaming** (`pyspark`)
 
-  * minimum score
-  * event type (post/comment)
-  * time windows
-* update frequency
-* activation status
+- **Role**: Processes the raw stream of Reddit posts to identify user-defined topics.
+- **Features**:
+  - Uses **Structured Streaming** for fault-tolerant processing.
+  - **Dynamic Configuration**: periodic polling of the API for new topic definitions.
+  - **CNF Matching**: Supports complex `(A OR B) AND (C)` keyword logic.
+  - **Output**: Writes matched events to a dedicated Kafka topic.
 
-**Backend Responsibilities**
+### 3. **API Service** (`express-ts`)
 
-* persist topic definitions
-* version topic configurations
-* distribute topic rules to Spark jobs
+- **Role**: The control plane for the platform.
+- **Features**:
+  - **Topic Management**: CRUD operations for topics (stored in SQLite).
+  - **Metrics**: Aggregates data from Elasticsearch on-the-fly (Compute-on-Read).
+  - **AI Integration**: Uses OpenAI to generate topic configurations from natural language descriptions.
+- **Endpoints**:
+  - `POST /topics`: Create a new topic.
+  - `POST /topics/:id/backfill`: Trigger historical data backfill.
+  - `GET /topics/:id/report`: Get metrics for a topic.
 
-Runtime topic tracking is strictly **rule-based and deterministic**.
+### 4. **Storage & Infrastructure**
 
----
+- **Kafka**: The central event bus. Buffers raw posts and matched posts.
+- **Elasticsearch**: Stores granular matched events for flexible aggregation.
+- **Logstash**: Syncs data from Kafka to Elasticsearch.
+- **SQLite**: Stores lightweight configuration data (topics, rules).
 
-#### 2.2 Global Viral Topic Detection
+## 🛠 Prerequisites
 
-The system continuously detects the **Top 3 viral topics globally**, regardless of user configuration.
+- **Docker** and **Docker Compose** (Required)
+- **Node.js 18+** (for local development)
+- **Python 3.9+** (for local development)
 
-A viral topic is defined as a **keyword or n-gram cluster** exhibiting statistically abnormal growth relative to its own historical baseline.
+## 🚦 Getting Started
 
-This feature guarantees system usefulness even with zero user-defined topics.
+1.  **Clone the repository**
 
----
+    ```bash
+    git clone https://github.com/your-repo/trend-insight.git
+    cd trend-insight/back-end
+    ```
 
-## Part II – System Architecture
+2.  **Configure Environment**
+    Copy the template and fill in your details (especially `OPENAI_API_KEY`).
 
-### 3. High-Level Architecture
+    ```bash
+    cp .env.template .env
+    ```
 
-Trend Insight follows an **event-driven, stream-first architecture**.
+3.  **Start Services**
 
-Core components:
-
-1. Reddit ingestion service
-2. Kafka event backbone
-3. Spark Structured Streaming jobs
-4. Metrics storage layer
-5. REST API service
-6. Optional local LLM enrichment layer
-
-All components are **loosely coupled** and independently scalable.
-
----
-
-### 4. Data Model
-
-#### 4.1 Event Definition
-
-Each Reddit post or comment is modeled as an **immutable event**.
-
-```json
-{
-  "event_id": "uuid",
-  "event_type": "post | comment",
-  "subreddit": "string",
-  "author": "string | null",
-  "created_utc": "timestamp",
-  "text": "string",
-  "score": "int",
-  "num_comments": "int | null",
-  "ingested_at": "timestamp"
-}
-```
-
-Events are append-only and never mutated after ingestion.
-
----
-
-## Part III – Ingestion Layer (Kafka)
-
-### 5. Ingestion Strategy
-
-Reddit does not provide push-based streaming APIs. Therefore, ingestion is performed via **high-frequency polling**.
-
-The ingestion service:
-
-* polls Reddit APIs on fixed intervals
-* normalizes responses into event schema
-* publishes events to Kafka
-
-Deduplication is handled using event_id hashing.
-
----
-
-### 6. Kafka Topics
-
-| Topic                   | Purpose                       |
-| ----------------------- | ----------------------------- |
-| reddit.raw.posts        | raw post events               |
-| reddit.raw.comments     | raw comment events            |
-| reddit.processed.events | normalized unified stream     |
-| reddit.topic.matched    | events matched to user topics |
-| reddit.global.trends    | global viral topic metrics    |
-
-Kafka serves as:
-
-* durable event log
-* replay mechanism
-* backpressure buffer
-
-ZooKeeper is **not required** in modern Kafka deployments.
-
----
-
-## Part IV – Stream Processing (Apache Spark)
-
-### 7. Spark Processing Model
-
-* Spark Structured Streaming
-* Micro-batch execution
-* Kafka as source and sink
-* Event-time processing
-
-Watermarking:
-
-* 10 minutes (configurable)
-
-
-- **Adaptive Windowing Strategy**:
-  To handle varying data sparsity, the system concurrently calculates metrics over three window types:
-  1.  **Short (30m window, 15m slide)**: Optimized for high-volume, viral topics.
-  2.  **Medium (60m window, 30m slide)**: Balanced for standard queries.
-  3.  **Long (120m window, 60m slide)**: Optimized for low-volume/sparse topics to ensure velocity metrics are capturable.
-  
-  All metrics are output with a `window_type` tag (`30m`, `60m`, `120m`).
-
----
-
-### 8. Text Preprocessing
-
-All text processing is deterministic:
-
-* lowercase
-* punctuation removal
-* tokenization
-* optional stopword filtering
-
-No embeddings, transformers, or semantic inference.
-
----
-
-### 9. Topic Matching Logic
-
-Topic matching is **rule-based**.
-
-A topic matches an event if:
-
-* event.subreddit ∈ allowed_subreddits
-* event.score ≥ threshold
-* at least N keywords from the same keyword_group appear
-* OR a configured n-gram is detected
-
-This avoids single-word ambiguity.
-
----
-
-### 10. Metrics Computation
-
-Spark computes metrics per topic and per window.
-
-Mandatory metrics:
-
-**Mentions**
-
-* count of matching events
-
-**Engagement**
-
-```
-engagement = sum(score + num_comments)
-```
-
-**Velocity**
-
-```
-velocity = (current_window_mentions - previous_window_mentions) / window_duration
-```
-
-**Acceleration**
-
-```
-acceleration = velocity_current - velocity_previous
-```
-
-**Trend Score**
-
-```
-trend_score = w1 * velocity + w2 * acceleration + w3 * engagement
-```
-
-Weights (example default):
-
-* w1 = 0.5
-* w2 = 0.3
-* w3 = 0.2
-
-Weights must be configurable.
-
----
-
-### 11. Global Viral Topic Detection
-
-Spark independently processes all events:
-
-1. extract candidate n-grams (2–4 words)
-2. aggregate frequencies over short and long windows
-3. compute velocity and acceleration
-4. rank by trend_score
-5. select top 3 per window
-
-Results are persisted regardless of user activity.
-
----
-
-### 12. Sentiment Analysis (Optional)
-
-Sentiment uses lexicon-based methods (e.g. VADER):
-
-* deterministic
-* explainable
-* low-cost
-
-Sentiment trends are aggregated, not stored per event.
-
----
-
-## Part V – Storage Layer
-
-### 13. Storage Strategy
-
-**Raw Events**
-
-* Optional object storage (S3-compatible)
-* Used for replay and debugging
-
-**Aggregated Metrics**
-
-* Relational DB or time-series DB
-* Indexed by topic_id + timestamp
-
-Spark never writes raw text to the database.
-
----
-
-## Part VI – API Layer
-
-### 14. REST API
-
-APIs are strictly **read-only for analytics**.
-
-Mandatory endpoints:
-
-* POST /topics
-* GET /topics/{id}
-* GET /topics/{id}/report
-* GET /trending/global
-
-All responses serve **precomputed data only**.
-
----
-
-## Part VII – Optional Local LLM Layer
-
-### 15. LLM Usage Constraints
-
-A local LLM may consume Spark outputs to:
-
-* generate explanations
-* summarize trends
-* compare topics
-
-The LLM:
-
-* never accesses raw streams
-* never influences rankings or metrics
-
----
-
-## Part VIII – Non-Functional Requirements
-
-* Horizontal scalability
-* Fault tolerance
-* Configurable via environment variables
-* Modular codebase
-* Extensive inline documentation
-
----
-
-## Part IX – Design Justification
-
-The system is precise without AI because it:
-
-* measures behavioral change
-* uses multi-word constraints
-* applies temporal statistics
-* filters noise through windows and baselines
+    ```bash
+    docker-compose up -d --build
+    ```
+
+    _Note: Kafka will take at least 15 seconds to be ready, so do not use the app until then._
+
+4.  **Verify Running Services**
+    ```bash
+    docker-compose ps
+    ```
+
+## 🔌 Access Points
+
+| Service          | URL                     | Description                  |
+| :--------------- | :---------------------- | :--------------------------- |
+| **API**          | `http://localhost:8000` | Main REST API                |
+| **Kafka UI**     | `http://localhost:8085` | Inspect topics and messages  |
+| **Kibana**       | `http://localhost:5601` | Visualize Elasticsearch data |
+| **Spark Master** | `http://localhost:8080` | Monitor Spark jobs           |
+| **Spark Worker** | `http://localhost:8081` | Monitor Spark worker         |
