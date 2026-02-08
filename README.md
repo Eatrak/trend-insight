@@ -2,7 +2,7 @@
 
 A high-performance, real-time data pipeline for tracking and analyzing Reddit trends. This system ingests data from Reddit, processes it using Spark Structured Streaming for topic detection, and visualizes insights via an API and Elasticsearch.
 
-![Trend Insight App](../images/app.png)
+![Trend Insight App](./images/app.png)
 
 ## 🌟 Why Trend Insight?
 
@@ -34,7 +34,7 @@ The system uses **OpenAI** to translate natural language descriptions into preci
 
 ## 🏗 Architecture
 
-<img src="../images/architecture.png" alt="Trend Insight Architecture" height="700">
+<img src="./images/architecture.png" alt="Trend Insight Architecture" height="700">
 
 ## 🚀 Services Overview
 
