@@ -72,73 +72,6 @@ services:
     ports:
       - "5044:5044"
 
-  spark-master:
-    image: apache/spark:3.5.0
-    container_name: trend-spark-master
-    ports:
-      - "7077:7077"
-      - "8080:8080"
-    command:
-      [
-        "/opt/spark/bin/spark-class",
-        "org.apache.spark.deploy.master.Master",
-        "--host",
-        "spark-master",
-        "--port",
-        "7077",
-        "--webui-port",
-        "8080",
-      ]
-    volumes:
-      - ./spark:/opt/spark-apps
-
-  spark-worker:
-    image: apache/spark:3.5.0
-    container_name: trend-spark-worker
-    depends_on:
-      - spark-master
-    ports:
-      - "8081:8081"
-    user: root
-    environment:
-      - API_TOPICS_URL=http://trend-api:8000/topics
-    volumes:
-      - ./spark:/opt/spark-apps
-      - spark_checkpoint:/checkpoints
-      - api_data:/data:ro
-    command:
-      - /bin/bash
-      - -lc
-      - >
-        pip install requests &&
-        /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077 --webui-port 8081
-
-  spark-streaming:
-    image: apache/spark:3.5.0
-    container_name: trend-spark-streaming
-    depends_on:
-      - kafka
-      - spark-master
-    user: root
-    environment:
-      - API_TOPICS_URL=http://trend-api:8000/topics
-    volumes:
-      - ./spark:/opt/spark-apps
-      - spark_checkpoint:/checkpoints
-      - api_data:/data:ro
-    command:
-      - /bin/bash
-      - -lc
-      - >
-        pip install requests &&
-        mkdir -p /tmp/ivy &&
-        /opt/spark/bin/spark-submit
-        --master spark://spark-master:7077
-        --conf spark.jars.ivy=/tmp/ivy
-        --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1
-        /opt/spark-apps/reddit_streaming.py
-    restart: unless-stopped
-
   ingestion:
     build:
       context: ./ingestion
@@ -173,4 +106,3 @@ services:
 volumes:
   es_data:
   api_data:
-  spark_checkpoint:

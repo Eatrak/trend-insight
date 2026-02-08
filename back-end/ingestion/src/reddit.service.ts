@@ -102,12 +102,20 @@ export class RedditService {
             break;
           }
 
+          const engagement = (msg.score || 0) + (msg.num_comments || 0) + 1;
+
           await producer.send({
-            topic: "reddit.raw.posts",
+            topic: "reddit.topic.matches",
             messages: [
               {
                 key: msg.event_id,
-                value: JSON.stringify({ ...msg, topic_id: topic.id }),
+                value: JSON.stringify({
+                  ...msg,
+                  topic_id: topic.id,
+                  timestamp: msg.created_utc,
+                  engagement,
+                  event_type: "matched_post",
+                }),
               },
             ],
           });
