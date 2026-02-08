@@ -1,4 +1,4 @@
-# Trend Insight Backend
+# Trend Insight
 
 A high-performance, real-time data pipeline for tracking and analyzing Reddit trends. This system ingests data from Reddit, processes it using Spark Structured Streaming for topic detection, and visualizes insights via an API and Elasticsearch.
 
