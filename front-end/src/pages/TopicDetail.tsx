@@ -496,7 +496,7 @@ export default function TopicDetail() {
 
           <Card className="col-span-1">
             <CardHeader>
-              <CardTitle>Sentiment Trend</CardTitle>
+              <CardTitle>Sentiment</CardTitle>
             </CardHeader>
 
             <CardContent className="pl-2">
