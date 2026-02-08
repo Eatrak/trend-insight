@@ -136,7 +136,7 @@ services:
         --master spark://spark-master:7077
         --conf spark.jars.ivy=/tmp/ivy
         --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1
-        /opt/spark-apps/jobs/reddit_streaming.py
+        /opt/spark-apps/reddit_streaming.py
     restart: unless-stopped
 
   ingestion:
