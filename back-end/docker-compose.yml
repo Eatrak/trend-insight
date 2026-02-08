@@ -141,7 +141,7 @@ services:
 
   ingestion:
     build:
-      context: ./services/ingestion
+      context: ./ingestion
     container_name: trend-ingestion
     depends_on:
       - kafka
@@ -153,7 +153,7 @@ services:
 
   api:
     build:
-      context: ./services/api
+      context: ./api
     container_name: trend-api
     hostname: trend-api
     depends_on:
