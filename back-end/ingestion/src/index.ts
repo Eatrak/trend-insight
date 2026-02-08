@@ -10,6 +10,7 @@ dotenv.config();
 
 /**
  * Service Configuration
+ * Loads settings from environment variables with defaults.
  */
 const CONFIG = {
   KAFKA_SERVERS: (
@@ -17,7 +18,7 @@ const CONFIG = {
   ).split(","),
   USER_AGENT: process.env.REDDIT_USER_AGENT || "trend-insight/0.1",
   POLL_INTERVAL: parseInt(process.env.REDDIT_POLL_INTERVAL_SECONDS || "15"),
-  POST_LIMIT: parseInt(process.env.REDDIT_LIMIT || "50"),
+  POST_LIMIT: parseInt(process.env.REDDIT_LIMIT || "20000"),
   API_BASE_URL: process.env.API_BASE_URL || "http://trend-api:8000",
 };
 
@@ -27,8 +28,14 @@ const kafka = new Kafka({
   logLevel: logLevel.ERROR,
 });
 
+console.log(
+  `[ingestion] Config loaded: POLL_INTERVAL=${CONFIG.POLL_INTERVAL}s, POST_LIMIT=${CONFIG.POST_LIMIT}`,
+);
+
 /**
  * Periodic worker that syncs recent activity for all topics.
+ * Fetches active topics and ingests posts from the last 48 hours.
+ * Runs in an infinite loop with a sleep interval.
  */
 async function syncTopicsPosts() {
   console.log("[ingestion] Starting Topic-Based Sync Worker...");
@@ -41,29 +48,23 @@ async function syncTopicsPosts() {
       const topics = (res.data as any[]) || [];
       const activeTopics = topics.filter((t: any) => t.is_active);
 
-      if (activeTopics.length > 0) {
-        console.log(
-          `[ingestion] Syncing ${activeTopics.length} active topics...`,
-        );
+      for (const topic of activeTopics) {
+        try {
+          console.log(`[ingestion] Syncing topic: ${topic.title || topic.id}`);
 
-        for (const topic of activeTopics) {
-          try {
-            console.log(
-              `[ingestion] Syncing topic: ${topic.title || topic.id}`,
-            );
+          // Sync logic: Fetch posts from the last 48 hours
+          // Using dayjs().unix() for consistent seconds timestamp
+          const cutoff = dayjs().unix() - 48 * 60 * 60;
 
-            // Sync logic: Fetch posts from the last 48 hours
-            const cutoff = Math.floor(Date.now() / 1000) - 48 * 60 * 60;
-
-            await RedditService.ingestTopicPosts(producer, topic, CONFIG, {
-              cutoffTimestamp: cutoff,
-            });
-          } catch (e: any) {
-            console.error(
-              `[ingestion] Error syncing topic ${topic.id}:`,
-              e.message,
-            );
-          }
+          await RedditService.ingestTopicPosts(producer, topic, CONFIG, {
+            cutoffTimestamp: cutoff,
+            maxLimit: CONFIG.POST_LIMIT,
+          });
+        } catch (e: any) {
+          console.error(
+            `[ingestion] Error syncing topic ${topic.id}:`,
+            e.message,
+          );
         }
       }
     } catch (e: any) {
@@ -77,6 +78,8 @@ async function syncTopicsPosts() {
 
 /**
  * Worker to handle historical backfill requests.
+ * Listens to 'reddit.tasks.backfill' Kafka topic.
+ * Performs deep storage ingestion for requested topics (up to 30 days).
  */
 async function startBackfilling() {
   console.log(
@@ -110,34 +113,26 @@ async function startBackfilling() {
           const rawValue = message.value?.toString();
           if (!rawValue) continue;
 
+          // Parse backfill payload
           const payload = JSON.parse(rawValue);
-          const { topic_id, subreddits = [], lookback_seconds } = payload;
+          const { topic_id, lookback_seconds } = payload;
 
+          // Retrieve full topic details to get keywords and subreddits
           const res = await axios.get(
             `${CONFIG.API_BASE_URL}/topics/${topic_id}`,
           );
           const topic = res.data as any;
-          const query = Utils.buildQuery(topic.keywords);
 
-          if (!query || !subreddits.length) {
-            await axios.patch(
-              `${CONFIG.API_BASE_URL}/topics/${topic_id}/status`,
-              {
-                status: "COMPLETED",
-                percentage: 100,
-              },
-            );
-            resolveOffset(message.offset);
-            continue;
-          }
-
-          // Fetch topic posts of the last 30 days
+          // Calculate cutoff timestamp (default 30 days ago)
           const cutoff = dayjs().unix() - (lookback_seconds || 30 * 24 * 3600);
 
+          // Invoke ingestion service with progress tracking
           await RedditService.ingestTopicPosts(producer, topic, CONFIG, {
             cutoffTimestamp: cutoff,
+            maxLimit: CONFIG.POST_LIMIT,
             heartbeat: async () => await heartbeat(),
             onProgress: async (pct: number) => {
+              // Updates topic status with percentage in DB
               await axios.patch(
                 `${CONFIG.API_BASE_URL}/topics/${topic_id}/status`,
                 {
@@ -147,6 +142,7 @@ async function startBackfilling() {
             },
           });
 
+          // Mark as COMPLETED upon success
           await axios.patch(
             `${CONFIG.API_BASE_URL}/topics/${topic_id}/status`,
             {
