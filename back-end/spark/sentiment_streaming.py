@@ -1,0 +1,79 @@
+import os
+import sys
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import from_json, col, udf, struct, to_json, lit
+from pyspark.sql.types import StringType, StructType, StructField, IntegerType, FloatType
+from textblob import TextBlob
+
+# Kafka & Config
+KAFKA_URL = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
+CHECKPOINT_DIR = "/checkpoints"
+
+# Define Schema for Reddit Topic Matches (from Ingestion)
+# Includes fields added by Ingestion: engagement, timestamp, event_type
+POST_SCHEMA = StructType([
+    StructField("topic_id", StringType(), True),
+    StructField("event_id", StringType(), True),
+    StructField("created_utc", StringType(), True),
+    StructField("text", StringType(), True),
+    StructField("score", IntegerType(), True),
+    StructField("num_comments", IntegerType(), True),
+    StructField("subreddit", StringType(), True),
+    StructField("author", StringType(), True),
+    StructField("engagement", IntegerType(), True),
+    StructField("timestamp", StringType(), True),
+    StructField("event_type", StringType(), True)
+])
+
+# UDF for Sentiment Analysis
+def analyze_sentiment(text):
+    if not text:
+        return 0.0
+    try:
+        blob = TextBlob(text)
+        return blob.sentiment.polarity  # Returns float between -1.0 and 1.0
+    except:
+        return 0.0
+
+sentiment_udf = udf(analyze_sentiment, FloatType())
+
+def main():
+    spark = SparkSession.builder \
+        .appName("RedditSentimentAnalyzer") \
+        .getOrCreate()
+    
+    spark.sparkContext.setLogLevel("WARN")
+
+    # 1. Read from Kafka
+    raw_stream = spark.readStream \
+        .format("kafka") \
+        .option("kafka.bootstrap.servers", KAFKA_URL) \
+        .option("subscribe", "reddit.topic.matches") \
+        .option("startingOffsets", "earliest") \
+        .load()
+
+    # 2. Parse JSON
+    parsed_stream = raw_stream.select(
+        from_json(col("value").cast("string"), POST_SCHEMA).alias("data")
+    ).select("data.*")
+
+    # 3. Apply Transformations
+    enriched_stream = parsed_stream \
+        .withColumn("sentiment_score", sentiment_udf(col("text")))
+
+    # 4. Write to Kafka
+    # Logstash will consume from this topic.
+    query = enriched_stream \
+        .select(to_json(struct("*")).alias("value")) \
+        .writeStream \
+        .format("kafka") \
+        .option("kafka.bootstrap.servers", KAFKA_URL) \
+        .option("topic", "reddit.topic.enriched") \
+        .option("checkpointLocation", f"{CHECKPOINT_DIR}/sentiment_analysis_v2") \
+        .outputMode("append") \
+        .start()
+
+    query.awaitTermination()
+
+if __name__ == "__main__":
+    main()

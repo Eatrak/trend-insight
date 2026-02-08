@@ -31,6 +31,7 @@ export interface Metric {
   end: string;
   mentions: number;
   engagement: number;
+  sentiment?: number; // Added
   sentiment_positive: number;
   sentiment_negative: number;
   sentiment_neutral: number;

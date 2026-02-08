@@ -18,6 +18,18 @@ import { Button } from "@/components/ui/button";
 import { api, type Metric, type Topic } from "@/services/api";
 import { useInterval } from "@/lib/useInterval";
 
+const getSentimentEmoji = (score: number) => {
+  if (score >= 0.05) return "😀"; // Positive
+  if (score <= -0.05) return "😡"; // Negative
+  return "😐"; // Neutral
+};
+
+const getSentimentLabel = (score: number) => {
+  if (score >= 0.05) return "Positive";
+  if (score <= -0.05) return "Negative";
+  return "Neutral";
+};
+
 export default function TopicDetail() {
   const { id } = useParams<{ id: string }>();
   const [topic, setTopic] = useState<Topic | null>(null);
@@ -135,11 +147,31 @@ export default function TopicDetail() {
       end: runner,
       mentions: match ? match.mentions : 0,
       engagement: match ? match.engagement : 0,
+      sentiment: match ? match.sentiment || 0 : 0,
       growth: match ? match.growth || 0 : 0,
     });
 
     runner += stepMs;
   }
+
+  // Calculate Weighted Average Sentiment for the current view
+  const visibleMetrics = metrics.filter(
+    (m) =>
+      m.window_type === "1d" &&
+      new Date(m.start).getTime() >= rangeCutoff.getTime() &&
+      new Date(m.start).getTime() < now.getTime(),
+  );
+
+  const totalMentionsInView = visibleMetrics.reduce(
+    (acc, curr) => acc + (curr.mentions || 0),
+    0,
+  );
+  const weightedSentimentSum = visibleMetrics.reduce(
+    (acc, curr) => acc + (curr.sentiment || 0) * (curr.mentions || 0),
+    0,
+  );
+  const avgSentimentInView =
+    totalMentionsInView > 0 ? weightedSentimentSum / totalMentionsInView : 0;
 
   return (
     <div className="flex min-h-screen w-full flex-col bg-muted/40 p-4 md:p-8">
@@ -484,6 +516,69 @@ export default function TopicDetail() {
                       dataKey="growth"
                       name="Growth"
                       stroke="var(--chart-1)"
+                      strokeWidth={2}
+                      dot={{ strokeWidth: 2, r: 4 }}
+                      activeDot={{ r: 6 }}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="col-span-1">
+            <CardHeader>
+              <CardTitle>
+                Sentiment - {getSentimentLabel(avgSentimentInView)}{" "}
+                {getSentimentEmoji(avgSentimentInView)} (
+                {avgSentimentInView.toFixed(2)})
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="pl-2">
+              <div className="h-[300px] w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={chartData}>
+                    <XAxis
+                      dataKey="end"
+                      tickFormatter={(val) => format(new Date(val), "MMM d")}
+                      stroke="#888888"
+                      fontSize={12}
+                      tickLine={false}
+                      axisLine={false}
+                    />
+                    <YAxis
+                      stroke="#888888"
+                      fontSize={12}
+                      tickLine={false}
+                      axisLine={false}
+                      domain={[-1, 1]}
+                      tickFormatter={(value) => getSentimentEmoji(value)}
+                    />
+                    <CartesianGrid
+                      strokeDasharray="3 3"
+                      vertical={false}
+                      stroke="hsl(var(--border))"
+                    />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: "hsl(var(--card))",
+                        borderColor: "hsl(var(--border))",
+                      }}
+                      itemStyle={{ color: "hsl(var(--foreground))" }}
+                      labelFormatter={(label) =>
+                        format(new Date(label), "PP p")
+                      }
+                      formatter={(value: any) => [
+                        `${getSentimentEmoji(Number(value))} ${Number(value).toFixed(2)}`,
+                        "Sentiment",
+                      ]}
+                    />
+                    {/* Reference Line at 0 for neutral sentiment */}
+                    <Line
+                      type="monotone"
+                      dataKey="sentiment"
+                      name="Sentiment"
+                      stroke="#10b981" // Green-ish
                       strokeWidth={2}
                       dot={{ strokeWidth: 2, r: 4 }}
                       activeDot={{ r: 6 }}

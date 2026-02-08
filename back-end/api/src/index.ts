@@ -404,6 +404,7 @@ app.get("/topics/:id/report", async (req: Request, res: Response) => {
           },
           aggs: {
             total_engagement: { sum: { field: "engagement" } }, // Sum of (score + comments + 1)
+            avg_sentiment: { avg: { field: "sentiment_score" } },
           },
         },
       },
@@ -420,6 +421,7 @@ app.get("/topics/:id/report", async (req: Request, res: Response) => {
         end: new Date(bucket.key + 86400000).toISOString(), // Approx end of day
         mentions: bucket.doc_count,
         engagement: bucket.total_engagement.value,
+        sentiment: bucket.avg_sentiment.value || 0,
         window_type: "1d",
       });
     }
@@ -468,21 +470,33 @@ function aggregateDailyToWindows(dailyRecords: any[]): any[] {
     );
 
     // Scan backwards for records that fall within [windowStart, currentEnd]
+    let totalSentimentWeighted = 0;
+    let totalMentionsForSentiment = 0;
+
     for (let j = index; j >= 0; j--) {
       const recStart = new Date(sorted[j].start);
       if (recStart >= windowStart) {
-        mentions += sorted[j].mentions || 0;
+        const m = sorted[j].mentions || 0;
+        mentions += m;
         engagement += sorted[j].engagement || 0;
+        totalSentimentWeighted += (sorted[j].sentiment || 0) * m;
+        totalMentionsForSentiment += m;
       } else {
         break; // Out of range
       }
     }
+
+    const weightedSentiment =
+      totalMentionsForSentiment > 0
+        ? totalSentimentWeighted / totalMentionsForSentiment
+        : 0;
 
     return {
       ...sorted[index],
       window_type: label,
       mentions,
       engagement,
+      sentiment: weightedSentiment,
       start: windowStart.toISOString(),
       // end remains the same as daily record
     };
