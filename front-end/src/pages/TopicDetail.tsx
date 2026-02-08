@@ -166,6 +166,10 @@ export default function TopicDetail() {
     (acc, curr) => acc + (curr.mentions || 0),
     0,
   );
+  const totalEngagementInView = visibleMetrics.reduce(
+    (acc, curr) => acc + (curr.engagement || 0),
+    0,
+  );
   const weightedSentimentSum = visibleMetrics.reduce(
     (acc, curr) => acc + (curr.sentiment || 0) * (curr.mentions || 0),
     0,
@@ -336,20 +340,54 @@ export default function TopicDetail() {
           ))}
         </div>
 
+        {/* Summary Widgets */}
+        <div className="grid gap-4 md:grid-cols-3">
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">
+                Total Matches
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{totalMentionsInView}</div>
+              <p className="text-xs text-muted-foreground">In selected range</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">
+                Total Engagement
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{totalEngagementInView}</div>
+              <p className="text-xs text-muted-foreground">
+                Posts + Upvotes + Comments
+              </p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">
+                Avg Sentiment
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">
+                {getSentimentEmoji(avgSentimentInView)}{" "}
+                {avgSentimentInView.toFixed(2)}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {getSentimentLabel(avgSentimentInView)}
+              </p>
+            </CardContent>
+          </Card>
+        </div>
+
         <div className="grid gap-4 md:grid-cols-1">
           <Card className="col-span-1">
             <CardHeader>
-              <CardTitle>
-                Matched Posts - Total{" "}
-                {metrics
-                  .filter(
-                    (m) =>
-                      m.window_type === "1d" &&
-                      new Date(m.start).getTime() >= rangeCutoff.getTime() &&
-                      new Date(m.start).getTime() < now.getTime(),
-                  )
-                  .reduce((acc, curr) => acc + (curr.mentions || 0), 0)}
-              </CardTitle>
+              <CardTitle>Matched Posts Over Time</CardTitle>
             </CardHeader>
             <CardContent className="pl-2">
               <div className="h-[300px] w-full">
@@ -403,17 +441,7 @@ export default function TopicDetail() {
 
           <Card className="col-span-1">
             <CardHeader>
-              <CardTitle>
-                Engagement - Total{" "}
-                {metrics
-                  .filter(
-                    (m) =>
-                      m.window_type === "1d" &&
-                      new Date(m.start).getTime() >= rangeCutoff.getTime() &&
-                      new Date(m.start).getTime() < now.getTime(),
-                  )
-                  .reduce((acc, curr) => acc + (curr.engagement || 0), 0)}
-              </CardTitle>
+              <CardTitle>Engagement Over Time</CardTitle>
             </CardHeader>
             <CardContent className="pl-2">
               <div className="h-[300px] w-full">
@@ -461,6 +489,66 @@ export default function TopicDetail() {
                       }}
                     />
                   </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="col-span-1">
+            <CardHeader>
+              <CardTitle>Sentiment Trend</CardTitle>
+            </CardHeader>
+
+            <CardContent className="pl-2">
+              <div className="h-[300px] w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={chartData}>
+                    <XAxis
+                      dataKey="end"
+                      tickFormatter={(val) => format(new Date(val), "MMM d")}
+                      stroke="#888888"
+                      fontSize={12}
+                      tickLine={false}
+                      axisLine={false}
+                    />
+                    <YAxis
+                      stroke="#888888"
+                      fontSize={12}
+                      tickLine={false}
+                      axisLine={false}
+                      domain={[-1, 1]}
+                      tickFormatter={(value) => getSentimentEmoji(value)}
+                    />
+                    <CartesianGrid
+                      strokeDasharray="3 3"
+                      vertical={false}
+                      stroke="hsl(var(--border))"
+                    />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: "hsl(var(--card))",
+                        borderColor: "hsl(var(--border))",
+                      }}
+                      itemStyle={{ color: "hsl(var(--foreground))" }}
+                      labelFormatter={(label) =>
+                        format(new Date(label), "PP p")
+                      }
+                      formatter={(value: any) => [
+                        `${getSentimentEmoji(Number(value))} ${Number(value).toFixed(2)}`,
+                        "Sentiment",
+                      ]}
+                    />
+                    {/* Reference Line at 0 for neutral sentiment */}
+                    <Line
+                      type="monotone"
+                      dataKey="sentiment"
+                      name="Sentiment"
+                      stroke="var(--chart-1)"
+                      strokeWidth={2}
+                      dot={{ strokeWidth: 2, r: 4 }}
+                      activeDot={{ r: 6 }}
+                    />
+                  </LineChart>
                 </ResponsiveContainer>
               </div>
             </CardContent>
@@ -516,69 +604,6 @@ export default function TopicDetail() {
                       dataKey="growth"
                       name="Growth"
                       stroke="var(--chart-1)"
-                      strokeWidth={2}
-                      dot={{ strokeWidth: 2, r: 4 }}
-                      activeDot={{ r: 6 }}
-                    />
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="col-span-1">
-            <CardHeader>
-              <CardTitle>
-                Sentiment - {getSentimentLabel(avgSentimentInView)}{" "}
-                {getSentimentEmoji(avgSentimentInView)} (
-                {avgSentimentInView.toFixed(2)})
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="pl-2">
-              <div className="h-[300px] w-full">
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={chartData}>
-                    <XAxis
-                      dataKey="end"
-                      tickFormatter={(val) => format(new Date(val), "MMM d")}
-                      stroke="#888888"
-                      fontSize={12}
-                      tickLine={false}
-                      axisLine={false}
-                    />
-                    <YAxis
-                      stroke="#888888"
-                      fontSize={12}
-                      tickLine={false}
-                      axisLine={false}
-                      domain={[-1, 1]}
-                      tickFormatter={(value) => getSentimentEmoji(value)}
-                    />
-                    <CartesianGrid
-                      strokeDasharray="3 3"
-                      vertical={false}
-                      stroke="hsl(var(--border))"
-                    />
-                    <Tooltip
-                      contentStyle={{
-                        backgroundColor: "hsl(var(--card))",
-                        borderColor: "hsl(var(--border))",
-                      }}
-                      itemStyle={{ color: "hsl(var(--foreground))" }}
-                      labelFormatter={(label) =>
-                        format(new Date(label), "PP p")
-                      }
-                      formatter={(value: any) => [
-                        `${getSentimentEmoji(Number(value))} ${Number(value).toFixed(2)}`,
-                        "Sentiment",
-                      ]}
-                    />
-                    {/* Reference Line at 0 for neutral sentiment */}
-                    <Line
-                      type="monotone"
-                      dataKey="sentiment"
-                      name="Sentiment"
-                      stroke="#10b981" // Green-ish
                       strokeWidth={2}
                       dot={{ strokeWidth: 2, r: 4 }}
                       activeDot={{ r: 6 }}
