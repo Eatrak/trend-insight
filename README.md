@@ -1,78 +1,77 @@
 # Trend Insight
 
-A high-performance, real-time data pipeline for tracking and analyzing Reddit trends. This system ingests data from Reddit, processes it using Spark Structured Streaming for topic detection, and visualizes insights via an API and Elasticsearch.
+A high-performance, real-time data pipeline for tracking and analyzing Reddit trends. This system ingests targeted data from Reddit, processes it using Spark Structured Streaming for trend analysis, and visualizes insights via an API and Elasticsearch.
 
 ![Trend Insight App](./images/app.png)
 
 ## 🌟 Why Trend Insight?
 
-In a world where social media trends move at light speed, understanding what is being discussed and how fast it's growing is very useful.
+In a world where social media trends move at light speed, understanding what is being discussed and how fast it's growing is critical.
 
-### ⚡️ Real-Time Detection
+### ⚡️ Targeted Ingestion
 
-Trend Insight uses **Spark Structured Streaming** to detect detailed topics the moment they are mentioned.
+Trend Insight intelligently polls Reddit for specific topics and keywords, ensuring you capture exactly what matters.
 
-### 🎯 Precision via CNF Logic
+### ⏳ Instant Historical Backfill
 
-Simple keyword matching is often inaccurate. We use **Conjunctive Normal Form (CNF)** logic (e.g., `(crypto OR bitcoin) AND (crash OR dip)`), ensuring high-quality signals.
+The system features a **dual-mode ingestion engine** that allows you to instantly backfill historical data (up to ~1,000 posts or ~month history) for any new topic, providing immediate context before real-time tracking begins.
 
-### ⏳ Historical Backfilling
+### 📈 Advanced Metrics
 
-Trend Insight uses a **dual-mode ingestion** to allow you to instantly backfill historical data up to 1 month for any new topic, giving you immediate insights.
+The system calculates key metrics for each topic over time:
 
-### 📈 Metrics
-
-The system calculates for each topic the various metrics along the timeline:
-
-- the number of related posts
-- the engagement (posts + upvotes + comments)
-- the growth rate of the topic
+- **Volume**: Number of related posts.
+- **Engagement**: Total impact (upvotes + comments).
+- **Growth Rate**: Velocity of the trend.
+- **Sentiment**: (Coming Soon) Analysis of post sentiment.
 
 ### 🤖 AI-Powered Configuration
 
-The system uses **OpenAI** to translate natural language descriptions into precise topic rules, so that the creation of a topic is fast and easy.
+The system uses **OpenAI** to translate natural language descriptions into precise topic rules (keywords, subreddits), making topic creation fast and intuitive.
 
 ## 🏗 Architecture
 
-<img src="./images/architecture.png" alt="Trend Insight Architecture" height="700">
+[![](https://mermaid.ink/img/pako:eNqdVWtP2zAU_SuRJ6QihdKmT8KExKBIbIUVgjRphA8mcdusiZ3ZzqBr-993bSdt0xQklg-JfX3OffgeOwsUsJAgF004TqfW8N6nFjwiezaGwasknOL40UfF0PJYxgMifPRkwOq5J2EYyVrNR2ZknY-ufXR4aBCEhjt-r-mECBkxCo7XY2uI54SX_HqE_4kCYiC1bWy-8vmZH5_VbqGI-i9xCCHfinhDhMCTiE4g4jc8nuFSnBssgykJR0xI8cDSKFgsfMR1KXWp5vVEI6Dq1WpDG1AeKZ6hv8EkOahM_YKD2TiK4wcsZlWiMtafc8iGWC1rxBn0Qpi6NpPyJqaYz2Dz9NfyJCc4AYzZutFcThnd7Jx6hmwiIIXpI5CKMQCe3krCk4zjCYEM8tGeTg485W0QY2hfIAjmwZZLneXdMJJEgczo3YCq-bpk0NmeYGCtmbWPymTEiSBU4lybV5xRqVBlseNAaqnD1zpP06q_gwPrEktsXcXsxVjyc3F0dLb86n2_tbTUlmWBG2TJpAm5OgtORayGZ96VxX0etBLyaFoUClOI2doB7xP5dsR96-86XEuKbovt_Rw8nxp49dxoYmG2lH3vtq4bcwEt5Swu9UY1Urm5H3gPMP2dAW2pLzGa60kv32WEz00222bgh8c_OIh2mcu4vL6TXLUEAw_gcIhLMraEyd5SIPdTo2ELSHhGtoZHL1Eop66Tvp7ucuEE_h-TFBf8R8nl3ba1ouyirbbahLygEmng2WavbH0dm8RLCHNkbNOdIrtTZMPPKgqRK3lGbJQQnmA1RQvF9ZGckgQuDxeGoVI58ukKOCmmPxlLChpn2WSK3DGOBcyyNMSSXEYYLoFkbeVwnAm_YBmVyO01TzraC3IX6BW5Tv2k22u1Gs1Ws9NtN5vtno3myD1p1rv9Tt9p9NuNVttxOisb_dVxm3Wn12_1HaftdBrddrvbtRGB-hi_Mb9g_Sde_QOM0neP?type=png)](https://mermaid.live/edit#pako:eNqdVWtP2zAU_SuRJ6QihdKmT8KExKBIbIUVgjRphA8mcdusiZ3ZzqBr-993bSdt0xQklg-JfX3OffgeOwsUsJAgF004TqfW8N6nFjwiezaGwasknOL40UfF0PJYxgMifPRkwOq5J2EYyVrNR2ZknY-ufXR4aBCEhjt-r-mECBkxCo7XY2uI54SX_HqE_4kCYiC1bWy-8vmZH5_VbqGI-i9xCCHfinhDhMCTiE4g4jc8nuFSnBssgykJR0xI8cDSKFgsfMR1KXWp5vVEI6Dq1WpDG1AeKZ6hv8EkOahM_YKD2TiK4wcsZlWiMtafc8iGWC1rxBn0Qpi6NpPyJqaYz2Dz9NfyJCc4AYzZutFcThnd7Jx6hmwiIIXpI5CKMQCe3krCk4zjCYEM8tGeTg485W0QY2hfIAjmwZZLneXdMJJEgczo3YCq-bpk0NmeYGCtmbWPymTEiSBU4lybV5xRqVBlseNAaqnD1zpP06q_gwPrEktsXcXsxVjyc3F0dLb86n2_tbTUlmWBG2TJpAm5OgtORayGZ96VxX0etBLyaFoUClOI2doB7xP5dsR96-86XEuKbovt_Rw8nxp49dxoYmG2lH3vtq4bcwEt5Swu9UY1Urm5H3gPMP2dAW2pLzGa60kv32WEz00222bgh8c_OIh2mcu4vL6TXLUEAw_gcIhLMraEyd5SIPdTo2ELSHhGtoZHL1Eop66Tvp7ucuEE_h-TFBf8R8nl3ba1ouyirbbahLygEmng2WavbH0dm8RLCHNkbNOdIrtTZMPPKgqRK3lGbJQQnmA1RQvF9ZGckgQuDxeGoVI58ukKOCmmPxlLChpn2WSK3DGOBcyyNMSSXEYYLoFkbeVwnAm_YBmVyO01TzraC3IX6BW5Tv2k22u1Gs1Ws9NtN5vtno3myD1p1rv9Tt9p9NuNVttxOisb_dVxm3Wn12_1HaftdBrddrvbtRGB-hi_Mb9g_Sde_QOM0neP)
 
 ## 🚀 Services Overview
 
 ### 1. **Ingestion Service** (`node-ts`)
 
-- **Role**: Continuously polls Reddit for new posts in monitored subreddits.
+- **Role**: The primary data entry point. Handles both real-time polling and historical backfilling.
 - **Features**:
-  - Real-time polling with deduplication.
-  - Handles historical backfill requests triggered by the API.
+  - **Topic-Specific Search**: Queries Reddit API for posts matching defined keywords/subreddits.
+  - **Smart Backfill**: Fetches historical data with progress tracking.
+  - **Rate Limit Handling**: Respects Reddit's API limits and optimizes request pacing.
+  - **Deduplication**: Ensures same post isn't processed twice.
 - **Key Config**: `REDDIT_POLL_INTERVAL_SECONDS`, `REDDIT_LIMIT`.
 
 ### 2. **Spark Streaming** (`pyspark`)
 
-- **Role**: Processes the raw stream of Reddit posts to identify user-defined topics.
+- **Role**: The analytics engine. Processes the stream of matched posts to calculate aggregated metrics.
 - **Features**:
-  - Uses **Structured Streaming** for fault-tolerant processing.
-  - **Dynamic Configuration**: periodic polling of the API for new topic definitions.
-  - **CNF Matching**: Supports complex `(A OR B) AND (C)` keyword logic.
-  - **Output**: Writes matched events to a dedicated Kafka topic.
+  - **Structured Streaming**: Fault-tolerant stream processing.
+  - **Trend Analysis**: Calculates growth rates and volume velocity.
+  - **Windowed Aggregation**: Computes metrics over sliding time windows.
+  - **Output**: Writes enriched metrics back to Kafka for indexing.
 
 ### 3. **API Service** (`express-ts`)
 
-- **Role**: The control plane for the platform.
+- **Role**: The control plane and gateway for the frontend.
 - **Features**:
-  - **Topic Management**: CRUD operations for topics (stored in SQLite).
-  - **Metrics**: Aggregates data from Elasticsearch on-the-fly (Compute-on-Read).
-  - **AI Integration**: Uses OpenAI to generate topic configurations from natural language descriptions.
+  - **Topic Management**: CRUD operations backed by SQLite.
+  - **Compute-on-Read**: Aggregates granular data from Elasticsearch for dashboard visualization.
+  - **AI Integration**: OpenAI-powered topic generation.
 - **Endpoints**:
   - `POST /topics`: Create a new topic.
   - `POST /topics/:id/backfill`: Trigger historical data backfill.
-  - `GET /topics/:id/report`: Get metrics for a topic.
+  - `GET /topics/:id/report`: Get full metrics report.
 
 ### 4. **Storage & Infrastructure**
 
-- **Kafka**: The central event bus. Buffers raw posts and matched posts.
-- **Elasticsearch**: Stores granular matched events for flexible aggregation.
-- **Logstash**: Syncs data from Kafka to Elasticsearch.
-- **SQLite**: Stores lightweight configuration data (topics, rules).
+- **Kafka**: Central message bus buffering raw and processed events.
+- **Elasticsearch**: High-speed search and aggregation engine for processed data.
+- **Logstash**: Reliable pipeline to sync Kafka topics to Elasticsearch.
+- **SQLite**: Lightweight storage for configuration and topic definitions.
 
 ## 🛠 Prerequisites
 
