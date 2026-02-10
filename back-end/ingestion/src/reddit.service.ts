@@ -98,23 +98,21 @@ export class RedditService {
         if (after) params.after = after;
 
         const data = await this.request(url, params, config.USER_AGENT);
-        const children = data.data?.children || [];
+        const posts = data.data?.children || [];
 
         // If no more results, stop
-        if (children.length === 0) {
+        if (posts.length === 0) {
           console.warn(
             `[ingestion] No more children returned (depth limit reached). Fetched: ${fetchedCount}`,
           );
           break;
         }
 
-        for (const child of children) {
-          const msg = Utils.extractContent(child);
-          if (!msg) continue;
+        for (const post of posts) {
+          const normalizedPost = Utils.extractContent(post);
+          if (!normalizedPost) continue;
 
-          // Parse timestamp using clean assignment (created_utc is seconds)
-          // Use msg.created_utc directly as it is safe standard Unix seconds
-          const createdUnix = msg.created_utc;
+          const createdUnix = normalizedPost.created_utc;
 
           // Stop if we reached beyond the cutoff timestamp (older posts)
           if (createdUnix < cutoffTimestamp) {
@@ -122,19 +120,22 @@ export class RedditService {
             break;
           }
 
-          // Simple engagement metric approximation
-          const engagement = (msg.score || 0) + (msg.num_comments || 0) + 1;
+          // Calculate the engagement of the post
+          const engagement =
+            (normalizedPost.score || 0) +
+            (normalizedPost.num_comments || 0) +
+            1;
 
           // Send to Kafka
           await producer.send({
             topic: "reddit.topic.matches",
             messages: [
               {
-                key: msg.event_id,
+                key: normalizedPost.event_id,
                 value: JSON.stringify({
-                  ...msg,
+                  ...normalizedPost,
                   topic_id: topic.id,
-                  timestamp: msg.created_utc,
+                  timestamp: normalizedPost.created_utc,
                   engagement,
                   event_type: "matched_post",
                 }),
@@ -143,12 +144,12 @@ export class RedditService {
           });
         }
 
-        fetchedCount += children.length;
-        const lastChild = children[children.length - 1];
+        fetchedCount += posts.length;
+        const lastChild = posts[posts.length - 1];
         after = lastChild.data.name;
 
         // Progress Calculation and Reporting
-        if (onProgress && children.length > 0) {
+        if (onProgress && posts.length > 0) {
           const lastCreated = lastChild.data.created_utc;
           const now = dayjs().unix();
           const totalRange = now - cutoffTimestamp;
