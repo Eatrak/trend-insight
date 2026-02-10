@@ -379,12 +379,10 @@ app.get("/topics/:id/report", async (req: Request, res: Response) => {
   try {
     const topicId = req.params.id;
 
-    // AGGREGATION QUERY (ES Upsert Architecture)
-    // We query the granular index where each document is a unique post (deduplicated by upsert).
-    // We simply sum the engagement stats for each day.
+    // AGGREGATION QUERY (Advanced Windowed Analytics)
     const result = await esClient.search({
-      index: "reddit-topic-granular", // New index
-      size: 0, // No hits, just aggs
+      index: "reddit-topic-granular",
+      size: 0,
       query: {
         bool: {
           must: [{ term: { "topic_id.keyword": topicId } }],
@@ -393,44 +391,114 @@ app.get("/topics/:id/report", async (req: Request, res: Response) => {
       aggs: {
         daily_buckets: {
           date_histogram: {
-            field: "@timestamp", // Logstash maps created_utc/timestamp to @timestamp
+            field: "@timestamp",
             calendar_interval: "1d",
             order: { _key: "asc" },
-            min_doc_count: 0, // Ensure we see empty days if we want continuous lines? Actually 0 is safer to skip for sparse data
+            min_doc_count: 0,
             extended_bounds: {
               min: "now-30d/d",
               max: "now/d",
             },
           },
           aggs: {
-            total_engagement: { sum: { field: "engagement" } }, // Sum of (score + comments + 1)
+            mentions: { value_count: { field: "topic_id.keyword" } },
+            engagement: { sum: { field: "engagement" } },
+            sentiment_sum: { sum: { field: "sentiment_score" } },
             avg_sentiment: { avg: { field: "sentiment_score" } },
+            // Moving Windows (Pipeline Aggregations)
+            moving_mentions_7d: {
+              moving_fn: {
+                buckets_path: "mentions",
+                window: 7,
+                script: "MovingFunctions.sum(values)",
+              },
+            },
+            moving_engagement_7d: {
+              moving_fn: {
+                buckets_path: "engagement",
+                window: 7,
+                script: "MovingFunctions.sum(values)",
+              },
+            },
+            moving_sentiment_7d: {
+              moving_fn: {
+                buckets_path: "sentiment_sum",
+                window: 7,
+                script: "MovingFunctions.sum(values)",
+              },
+            },
+            moving_mentions_30d: {
+              moving_fn: {
+                buckets_path: "mentions",
+                window: 30,
+                script: "MovingFunctions.sum(values)",
+              },
+            },
+            moving_engagement_30d: {
+              moving_fn: {
+                buckets_path: "engagement",
+                window: 30,
+                script: "MovingFunctions.sum(values)",
+              },
+            },
+            moving_sentiment_30d: {
+              moving_fn: {
+                buckets_path: "sentiment_sum",
+                window: 30,
+                script: "MovingFunctions.sum(values)",
+              },
+            },
           },
         },
       },
     });
 
-    const dailyMetrics: any[] = [];
+    const metrics: any[] = [];
     const buckets = (result.aggregations as any)?.daily_buckets?.buckets || [];
 
     for (const bucket of buckets) {
-      // Convert bucket to Metric format
-      dailyMetrics.push({
+      const timestamp = bucket.key_as_string;
+      const endTimestamp = new Date(bucket.key + 86400000).toISOString();
+
+      // 1. Daily record
+      metrics.push({
         topic_id: topicId,
-        start: bucket.key_as_string,
-        end: new Date(bucket.key + 86400000).toISOString(), // Approx end of day
+        start: timestamp,
+        end: endTimestamp,
         mentions: bucket.doc_count,
-        engagement: bucket.total_engagement.value,
-        sentiment: bucket.avg_sentiment.value || 0,
+        engagement: bucket.engagement?.value || 0,
+        sentiment: bucket.avg_sentiment?.value || 0,
         window_type: "1d",
+      });
+
+      // 2. Weekly record (7d moving sum)
+      const m7 = bucket.moving_mentions_7d?.value || 0;
+      metrics.push({
+        topic_id: topicId,
+        start: new Date(bucket.key - 6 * 86400000).toISOString(),
+        end: endTimestamp,
+        mentions: m7,
+        engagement: bucket.moving_engagement_7d?.value || 0,
+        sentiment: m7 > 0 ? (bucket.moving_sentiment_7d?.value || 0) / m7 : 0,
+        window_type: "1w",
+      });
+
+      // 3. Monthly record (30d moving sum)
+      const m30 = bucket.moving_mentions_30d?.value || 0;
+      metrics.push({
+        topic_id: topicId,
+        start: new Date(bucket.key - 29 * 86400000).toISOString(),
+        end: endTimestamp,
+        mentions: m30,
+        engagement: bucket.moving_engagement_30d?.value || 0,
+        sentiment:
+          m30 > 0 ? (bucket.moving_sentiment_30d?.value || 0) / m30 : 0,
+        window_type: "1m",
       });
     }
 
-    // --- Synthesis: 1d -> 1w, 1m ---
-    const allWindows = aggregateDailyToWindows(dailyMetrics);
-
-    // --- Metric Enrichment (Compute-on-Read) ---
-    const finalMetrics = enrichMetrics(allWindows);
+    // --- Metric Enrichment (Compute Growth) ---
+    const finalMetrics = enrichMetrics(metrics);
 
     // Sort descending by end time for the report
     finalMetrics.sort(
@@ -451,74 +519,9 @@ app.get("/topics/:id/report", async (req: Request, res: Response) => {
   }
 });
 
-// Helper: Synthesize 7d and 30d views from daily metrics
-function aggregateDailyToWindows(dailyRecords: any[]): any[] {
-  // 1. Ensure sorted by date ASC
-  const sorted = [...dailyRecords].sort(
-    (a, b) => new Date(a.start).getTime() - new Date(b.start).getTime(),
-  );
-  const result: any[] = [];
-
-  // Helper to sum previous N days
-  const getWindowSum = (index: number, days: number, label: string) => {
-    let mentions = 0;
-    let engagement = 0;
-    const currentEnd = new Date(sorted[index].end);
-    // Start date of the window is (end - days)
-    const windowStart = new Date(
-      currentEnd.getTime() - days * 24 * 60 * 60 * 1000,
-    );
-
-    // Scan backwards for records that fall within [windowStart, currentEnd]
-    let totalSentimentWeighted = 0;
-    let totalMentionsForSentiment = 0;
-
-    for (let j = index; j >= 0; j--) {
-      const recStart = new Date(sorted[j].start);
-      if (recStart >= windowStart) {
-        const m = sorted[j].mentions || 0;
-        mentions += m;
-        engagement += sorted[j].engagement || 0;
-        totalSentimentWeighted += (sorted[j].sentiment || 0) * m;
-        totalMentionsForSentiment += m;
-      } else {
-        break; // Out of range
-      }
-    }
-
-    const weightedSentiment =
-      totalMentionsForSentiment > 0
-        ? totalSentimentWeighted / totalMentionsForSentiment
-        : 0;
-
-    return {
-      ...sorted[index],
-      window_type: label,
-      mentions,
-      engagement,
-      sentiment: weightedSentiment,
-      start: windowStart.toISOString(),
-      // end remains the same as daily record
-    };
-  };
-
-  for (let i = 0; i < sorted.length; i++) {
-    // Add original 1d record
-    result.push({ ...sorted[i], window_type: "1d" });
-
-    // Synthesize 1w (7 days)
-    result.push(getWindowSum(i, 7, "1w"));
-
-    // Synthesize 1m (30 days)
-    result.push(getWindowSum(i, 30, "1m"));
-  }
-
-  return result;
-}
-
-// Helper: Compute Velocity & Acceleration
+// Helper: Compute Velocity & Acceleration (Growth)
 function enrichMetrics(rawDocs: any[]) {
-  // 1. Group by window_type (30m, 60m, 120m)
+  // Group by window_type to compare with previous period
   const groups: Record<string, any[]> = {};
   rawDocs.forEach((d) => {
     const type = d.window_type || "1d";
@@ -527,39 +530,26 @@ function enrichMetrics(rawDocs: any[]) {
   });
 
   const output: any[] = [];
-  // 2. Process each group
   for (const type of Object.keys(groups)) {
-    // Sort by start time ASC to find previous window
+    // Sort by start time ASC
     const docs = groups[type].sort(
       (a, b) => new Date(a.start).getTime() - new Date(b.start).getTime(),
     );
 
     for (let i = 0; i < docs.length; i++) {
       const curr = docs[i];
-      const prev = docs[i - 1]; // Simple predecessor check
+      const prev = docs[i - 1];
 
       let growth = 1.0;
-
-      // Check if prev is valid predecessor
       if (prev) {
         const m_curr = curr.mentions || 0;
         const m_prev = prev.mentions || 0;
-        // Avoid division by zero: treat 0 as 1 for baseline comparison
         const divisor = m_prev === 0 ? 1 : m_prev;
         growth = m_curr / divisor;
       }
 
-      // Simplified score: Engagement + (Growth * 10)
-      // If growth is 2x, that adds 20 points.
-      // If engagement is 1000, that dominates.
-      // Let's just sum them roughly for now or likely the user doesn't strictly rely on this computed trend_score yet.
       const trend_score = (curr.engagement || 0) * growth;
-
-      output.push({
-        ...curr,
-        growth,
-        trend_score,
-      });
+      output.push({ ...curr, growth, trend_score });
     }
   }
 
