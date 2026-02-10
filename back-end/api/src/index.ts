@@ -250,7 +250,7 @@ app.post("/topics/:id/backfill", async (req: Request, res: Response) => {
     };
 
     await producer.send({
-      topic: "reddit.tasks.backfill",
+      topic: "topic.backfilling.tasks",
       messages: [{ value: JSON.stringify(message) }],
     });
 

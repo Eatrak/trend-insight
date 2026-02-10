@@ -77,7 +77,7 @@ async function syncTopicsPosts() {
 
 /**
  * Worker to handle historical backfill requests.
- * Listens to 'reddit.tasks.backfill' Kafka topic.
+ * Listens to 'topic.backfilling.tasks' Kafka topic.
  * Performs deep storage ingestion for requested topics (up to 30 days).
  */
 async function startBackfilling() {
@@ -88,7 +88,7 @@ async function startBackfilling() {
   await Utils.sleep(3000);
 
   const consumer = kafka.consumer({
-    groupId: "ingestion-backfill-worker",
+    groupId: "backfill-topic",
     sessionTimeout: 120000,
     heartbeatInterval: 30000,
     rebalanceTimeout: 120000,
@@ -96,7 +96,7 @@ async function startBackfilling() {
   const producer = await Utils.getProducer(kafka);
 
   await consumer.connect();
-  await consumer.subscribe({ topic: "reddit.tasks.backfill" });
+  await consumer.subscribe({ topic: "topic.backfilling.tasks" });
 
   await consumer.run({
     eachBatch: async ({

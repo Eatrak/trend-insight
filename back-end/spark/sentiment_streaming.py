@@ -48,7 +48,8 @@ def main():
     raw_stream = spark.readStream \
         .format("kafka") \
         .option("kafka.bootstrap.servers", KAFKA_URL) \
-        .option("subscribe", "reddit.topic.matches") \
+        .option("subscribe", "topic.matched.posts") \
+        .option("kafka.group.id", "enrich-matched-posts") \
         .option("startingOffsets", "earliest") \
         .load()
 
@@ -68,8 +69,8 @@ def main():
         .writeStream \
         .format("kafka") \
         .option("kafka.bootstrap.servers", KAFKA_URL) \
-        .option("topic", "reddit.topic.enriched") \
-        .option("checkpointLocation", f"{CHECKPOINT_DIR}/sentiment_analysis_v2") \
+        .option("topic", "topic.enriched.matched.posts") \
+        .option("checkpointLocation", f"{CHECKPOINT_DIR}/sentiment_analysis_v3") \
         .outputMode("append") \
         .start()
 

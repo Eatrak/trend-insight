@@ -128,7 +128,7 @@ export class RedditService {
 
           // Send to Kafka
           await producer.send({
-            topic: "reddit.topic.matches",
+            topic: "topic.matched.posts",
             messages: [
               {
                 key: normalizedPost.event_id,
