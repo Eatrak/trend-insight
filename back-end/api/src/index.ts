@@ -44,7 +44,6 @@ db.exec(`
     subreddits TEXT, -- CSV
     filters_json TEXT, -- JSON string
     update_frequency_seconds INTEGER DEFAULT 60,
-    is_active INTEGER DEFAULT 1,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     backfill_status TEXT DEFAULT 'IDLE', -- IDLE, PENDING, COMPLETED, ERROR
     backfill_percentage REAL DEFAULT 0.0
@@ -165,15 +164,8 @@ app.get("/topics", (req: Request, res: Response) => {
 // 1. POST /topics
 app.post("/topics", (req: Request, res: Response) => {
   try {
-    const {
-      id,
-      description,
-      keywords,
-      subreddits,
-      filters,
-      update_frequency,
-      is_active,
-    } = req.body;
+    const { id, description, keywords, subreddits, filters, update_frequency } =
+      req.body;
 
     // Basic validation
     if (!id || !keywords || !subreddits) {
@@ -184,8 +176,8 @@ app.post("/topics", (req: Request, res: Response) => {
     }
 
     const stmt = db.prepare(`
-      INSERT INTO topics (id, description, keywords, subreddits, filters_json, update_frequency_seconds, is_active, created_at, backfill_status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'IDLE')
+      INSERT INTO topics (id, description, keywords, subreddits, filters_json, update_frequency_seconds, created_at, backfill_status)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'IDLE')
     `);
 
     stmt.run(
@@ -195,7 +187,6 @@ app.post("/topics", (req: Request, res: Response) => {
       Array.isArray(subreddits) ? subreddits.join(",") : subreddits,
       JSON.stringify(filters || {}),
       update_frequency || 60, // Default to 60s
-      is_active ? 1 : 0,
       new Date().toISOString(),
     );
 

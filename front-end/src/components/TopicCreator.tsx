@@ -120,7 +120,6 @@ export default function TopicCreator({ onTopicCreated }: TopicCreatorProps) {
         keywords: cleanedKeywords, // Send as native JSON array
         subreddits: config.subreddits.split(",").map((s) => s.trim()),
         update_frequency_seconds: 60,
-        is_active: true, // Default to active
       });
 
       // Reset and notify parent

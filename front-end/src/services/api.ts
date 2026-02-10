@@ -15,9 +15,9 @@ export interface Topic {
   subreddits: string[];
   filters: Filter;
   update_frequency_seconds: number;
-  is_active: boolean;
+  created_at: string;
   updated_at?: string;
-  backfill_status?: string; // IDLE, PENDING, COMPLETED, ERROR
+  backfill_status: "IDLE" | "PENDING" | "COMPLETED" | "ERROR";
   backfill_percentage?: number;
 }
 

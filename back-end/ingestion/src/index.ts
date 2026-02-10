@@ -46,9 +46,8 @@ async function syncTopicsPosts() {
       // Fetch the latest topic definitions from the API
       const res = await axios.get(`${CONFIG.API_BASE_URL}/topics`);
       const topics = (res.data as any[]) || [];
-      const activeTopics = topics.filter((t: any) => t.is_active);
 
-      for (const topic of activeTopics) {
+      for (const topic of topics) {
         try {
           console.log(`[ingestion] Syncing topic: ${topic.title || topic.id}`);
 
