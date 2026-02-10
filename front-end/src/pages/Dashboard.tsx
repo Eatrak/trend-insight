@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { Activity, ArrowRight } from "lucide-react";
+import { ArrowRight } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -63,9 +63,6 @@ export default function Dashboard() {
                   <TableHeader>
                     <TableRow>
                       <TableHead>Topic ID</TableHead>
-                      <TableHead className="hidden md:table-cell">
-                        Status
-                      </TableHead>
                       <TableHead className="text-right">Action</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -73,30 +70,25 @@ export default function Dashboard() {
                     {topics.map((topic) => (
                       <TableRow key={topic.id}>
                         <TableCell>
-                          <div className="font-medium">
-                            <Link
-                              to={`/topics/${topic.id}`}
-                              className="hover:underline flex items-center gap-2"
-                            >
-                              <Activity className="h-4 w-4" />
-                              {topic.id}
-                            </Link>
+                          <div className="flex items-center gap-3">
+                            <div className="font-medium">
+                              <Link
+                                to={`/topics/${topic.id}`}
+                                className="hover:underline flex items-center gap-2"
+                              >
+                                {topic.id}
+                              </Link>
+                            </div>
+                            {topic.backfill_status === "PENDING" && (
+                              <span className="inline-flex items-center rounded-md bg-blue-50 px-2 py-0.5 text-[10px] font-medium text-blue-700 ring-1 ring-inset ring-blue-700/10">
+                                Backfilling{" "}
+                                {(topic.backfill_percentage || 0).toFixed(0)}%
+                              </span>
+                            )}
                           </div>
                           <div className="hidden text-sm text-muted-foreground md:inline">
                             {topic.description}
                           </div>
-                        </TableCell>
-                        <TableCell className="hidden md:table-cell">
-                          {topic.backfill_status === "PENDING" ? (
-                            <span className="inline-flex items-center rounded-md bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700 ring-1 ring-inset ring-blue-700/10">
-                              Backfilling{" "}
-                              {(topic.backfill_percentage || 0).toFixed(0)}%
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center rounded-md bg-green-50 px-2 py-1 text-xs font-medium text-green-700 ring-1 ring-inset ring-green-600/20">
-                              Active
-                            </span>
-                          )}
                         </TableCell>
                         <TableCell className="text-right">
                           <Button asChild size="sm" variant="ghost">
