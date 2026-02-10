@@ -4,7 +4,6 @@ import Database from "better-sqlite3";
 import { Client } from "@elastic/elasticsearch";
 import dotenv from "dotenv";
 import { Kafka } from "kafkajs";
-import path from "path";
 
 dotenv.config();
 
@@ -163,22 +162,6 @@ async function startAutoBackfillScheduler() {
             subreddits: allowedSubreddits,
             lookback_seconds: 48 * 60 * 60, // 48 Hours
           };
-
-          // We do NOT update the DB status to 'PENDING' here to avoid blocking the UI status.
-          // The ingestion service will process it purely in the background.
-          // However, the ingestion service DOES update status to PENDING/COMPLETED.
-          // To avoid UI flicker, we might want to check how ingestion handles it.
-          // Looking at ingestion service:
-          // callback: await axios.patch(... status: "COMPLETED" ...)
-          // This effectively "resets" the status.
-          // If the user triggers manual backfill, it sets PENDING.
-          // If auto-sync runs, it sends a task. Ingestion processes it.
-          // Ingestion updates status to PENDING (step 2? no request from api does that).
-          // Wait, ingestion service DOES send patch updates for progress.
-          // This might interfere with UI if the user thinks it's "idle".
-          // But the user requested "auto sync".
-          // Let's proceed: The ingestion updates will happen.
-          // Ideally we might want a separate "auto-sync" status or just let it be.
 
           await producer.send({
             topic: "reddit.tasks.backfill",
