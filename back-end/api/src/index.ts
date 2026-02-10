@@ -121,66 +121,6 @@ const connectProducer = async () => {
 connectProducer();
 
 // ----------------------------------------------------------------------------
-// Auto-Sync Scheduler (Every 2 Minutes)
-// ----------------------------------------------------------------------------
-async function startAutoBackfillScheduler() {
-  console.log("[Auto-Sync] Scheduler started (Interval: 2 minutes)");
-
-  // Initial delay to let everything settle
-  await new Promise((resolve) => setTimeout(resolve, 30000));
-
-  setInterval(
-    async () => {
-      try {
-        console.log("[Auto-Sync] Triggering auto-sync for active topics...");
-        // 1. Get all active topics
-        const stmt = db.prepare("SELECT * FROM topics WHERE is_active = 1");
-        const topics = stmt.all() as any[];
-
-        if (topics.length === 0) {
-          console.log("[Auto-Sync] No active topics found.");
-          return;
-        }
-
-        const allowedSubreddits = (process.env.REDDIT_SUBREDDITS || "")
-          .split(",")
-          .map((s) => s.trim())
-          .filter((s) => s.length > 0);
-
-        // 2. Queue backfill task for each topic
-        for (const topic of topics) {
-          // Skip if manual backfill is currently running to avoid conflicts
-          if (topic.backfill_status === "PENDING") {
-            console.log(
-              `[Auto-Sync] Skipping ${topic.id} (Manual Backfill in progress)`,
-            );
-            continue;
-          }
-
-          const message = {
-            topic_id: topic.id,
-            subreddits: allowedSubreddits,
-            lookback_seconds: 48 * 60 * 60, // 48 Hours
-          };
-
-          await producer.send({
-            topic: "reddit.tasks.backfill",
-            messages: [{ value: JSON.stringify(message) }],
-          });
-
-          console.log(`[Auto-Sync] Queued sync for ${topic.id}`);
-        }
-      } catch (error: any) {
-        console.error("[Auto-Sync] Error:", error.message);
-      }
-    },
-    2 * 60 * 1000,
-  ); // 2 Minutes
-}
-
-startAutoBackfillScheduler();
-
-// ----------------------------------------------------------------------------
 // Storage: Elasticsearch (Metrics, Trends)
 // ----------------------------------------------------------------------------
 const esClient = new Client({

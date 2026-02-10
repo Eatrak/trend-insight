@@ -82,6 +82,7 @@ async function syncTopicsPosts() {
  * Performs deep storage ingestion for requested topics (up to 30 days).
  */
 async function startBackfilling() {
+  // Delay for Spark to load TOPIC_CACHE
   console.log(
     "[backfill] Starting worker. Waiting 3s for system stabilization...",
   );
@@ -115,7 +116,7 @@ async function startBackfilling() {
 
           // Parse backfill payload
           const payload = JSON.parse(rawValue);
-          const { topic_id, lookback_seconds } = payload;
+          const { topic_id } = payload;
 
           // Retrieve full topic details to get keywords and subreddits
           const res = await axios.get(
@@ -123,8 +124,8 @@ async function startBackfilling() {
           );
           const topic = res.data as any;
 
-          // Calculate cutoff timestamp (default 30 days ago)
-          const cutoff = dayjs().unix() - (lookback_seconds || 30 * 24 * 3600);
+          // Calculate cutoff timestamp (Fixed 30 days ago for backfills)
+          const cutoff = dayjs().unix() - 30 * 24 * 3600;
 
           // Invoke ingestion service with progress tracking
           await RedditService.ingestTopicPosts(producer, topic, CONFIG, {
