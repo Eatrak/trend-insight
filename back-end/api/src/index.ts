@@ -456,56 +456,74 @@ app.get("/topics/:id/report", async (req: Request, res: Response) => {
     const metrics: any[] = [];
     const buckets = (result.aggregations as any)?.daily_buckets?.buckets || [];
 
+    // Track previous values for growth calculation
+    const prevMap: Record<string, number> = { "1d": 0, "1w": 0, "1m": 0 };
+
     for (const bucket of buckets) {
       const timestamp = bucket.key_as_string;
       const endTimestamp = new Date(bucket.key + 86400000).toISOString();
 
-      // 1. Daily record
-      metrics.push({
-        topic_id: topicId,
-        start: timestamp,
-        end: endTimestamp,
-        mentions: bucket.doc_count,
-        engagement: bucket.engagement?.value || 0,
-        sentiment: bucket.avg_sentiment?.value || 0,
-        window_type: "1d",
-      });
+      const processWindow = (
+        type: string,
+        mentions: number,
+        engagement: number,
+        sentimentSum: number,
+      ) => {
+        const prevMentions = prevMap[type] || 0;
+        const growth = prevMentions === 0 ? 1.0 : mentions / prevMentions;
+        const sentiment = mentions > 0 ? sentimentSum / mentions : 0;
 
-      // 2. Weekly record (7d moving sum)
-      const m7 = bucket.moving_mentions_7d?.value || 0;
-      metrics.push({
-        topic_id: topicId,
-        start: new Date(bucket.key - 6 * 86400000).toISOString(),
-        end: endTimestamp,
-        mentions: m7,
-        engagement: bucket.moving_engagement_7d?.value || 0,
-        sentiment: m7 > 0 ? (bucket.moving_sentiment_7d?.value || 0) / m7 : 0,
-        window_type: "1w",
-      });
+        metrics.push({
+          topic_id: topicId,
+          start:
+            type === "1d"
+              ? timestamp
+              : new Date(
+                  bucket.key - (type === "1w" ? 6 : 29) * 86400000,
+                ).toISOString(),
+          end: endTimestamp,
+          mentions,
+          engagement,
+          sentiment,
+          growth,
+          trend_score: engagement * growth,
+          window_type: type,
+        });
 
-      // 3. Monthly record (30d moving sum)
-      const m30 = bucket.moving_mentions_30d?.value || 0;
-      metrics.push({
-        topic_id: topicId,
-        start: new Date(bucket.key - 29 * 86400000).toISOString(),
-        end: endTimestamp,
-        mentions: m30,
-        engagement: bucket.moving_engagement_30d?.value || 0,
-        sentiment:
-          m30 > 0 ? (bucket.moving_sentiment_30d?.value || 0) / m30 : 0,
-        window_type: "1m",
-      });
+        prevMap[type] = mentions;
+      };
+
+      // 1. Daily
+      processWindow(
+        "1d",
+        bucket.doc_count,
+        bucket.engagement?.value || 0,
+        bucket.sentiment_sum?.value || 0,
+      );
+
+      // 2. Weekly
+      processWindow(
+        "1w",
+        bucket.moving_mentions_7d?.value || 0,
+        bucket.moving_engagement_7d?.value || 0,
+        bucket.moving_sentiment_7d?.value || 0,
+      );
+
+      // 3. Monthly
+      processWindow(
+        "1m",
+        bucket.moving_mentions_30d?.value || 0,
+        bucket.moving_engagement_30d?.value || 0,
+        bucket.moving_sentiment_30d?.value || 0,
+      );
     }
 
-    // --- Metric Enrichment (Compute Growth) ---
-    const finalMetrics = enrichMetrics(metrics);
-
     // Sort descending by end time for the report
-    finalMetrics.sort(
+    metrics.sort(
       (a, b) => new Date(b.end).getTime() - new Date(a.end).getTime(),
     );
 
-    res.json({ topic_id: topicId, metrics: finalMetrics });
+    res.json({ topic_id: topicId, metrics });
   } catch (error: any) {
     console.error("ES Error:", error);
     if (error.meta && error.meta.body) {
@@ -519,42 +537,7 @@ app.get("/topics/:id/report", async (req: Request, res: Response) => {
   }
 });
 
-// Helper: Compute Velocity & Acceleration (Growth)
-function enrichMetrics(rawDocs: any[]) {
-  // Group by window_type to compare with previous period
-  const groups: Record<string, any[]> = {};
-  rawDocs.forEach((d) => {
-    const type = d.window_type || "1d";
-    if (!groups[type]) groups[type] = [];
-    groups[type].push(d);
-  });
-
-  const output: any[] = [];
-  for (const type of Object.keys(groups)) {
-    // Sort by start time ASC
-    const docs = groups[type].sort(
-      (a, b) => new Date(a.start).getTime() - new Date(b.start).getTime(),
-    );
-
-    for (let i = 0; i < docs.length; i++) {
-      const curr = docs[i];
-      const prev = docs[i - 1];
-
-      let growth = 1.0;
-      if (prev) {
-        const m_curr = curr.mentions || 0;
-        const m_prev = prev.mentions || 0;
-        const divisor = m_prev === 0 ? 1 : m_prev;
-        growth = m_curr / divisor;
-      }
-
-      const trend_score = (curr.engagement || 0) * growth;
-      output.push({ ...curr, growth, trend_score });
-    }
-  }
-
-  return output;
-}
+// 6. POST /generate-config
 
 // 6. POST /generate-config
 app.post("/generate-config", async (req: Request, res: Response) => {
