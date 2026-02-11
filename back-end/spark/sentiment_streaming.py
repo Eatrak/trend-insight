@@ -7,7 +7,6 @@ from textblob import TextBlob
 
 # Kafka & Config
 KAFKA_URL = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
-CHECKPOINT_DIR = "/checkpoints"
 
 # Define Schema for Reddit Topic Matches (from Ingestion)
 # Includes fields added by Ingestion: engagement, timestamp, event_type
@@ -70,7 +69,7 @@ def main():
         .format("kafka") \
         .option("kafka.bootstrap.servers", KAFKA_URL) \
         .option("topic", "topic.enriched.matched.posts") \
-        .option("checkpointLocation", f"{CHECKPOINT_DIR}/sentiment_analysis_v3") \
+        .option("checkpointLocation", "/checkpoints/sentiment_analysis") \
         .outputMode("append") \
         .start()
 
