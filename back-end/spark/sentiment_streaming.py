@@ -1,7 +1,6 @@
 import os
-import sys
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import from_json, col, udf, struct, to_json, lit
+from pyspark.sql.functions import from_json, col, udf, struct, to_json
 from pyspark.sql.types import StringType, StructType, StructField, IntegerType, FloatType
 from textblob import TextBlob
 
