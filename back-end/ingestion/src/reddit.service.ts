@@ -64,7 +64,7 @@ export class RedditService {
     const { cutoffTimestamp, onProgress, heartbeat, maxLimit } = options;
 
     // construct the search query from keywords
-    const query = Utils.buildQuery(topic.keywords);
+    const query = RedditService.buildQuery(topic.keywords);
     if (!query) return;
 
     // construct the subreddit string (limited to 30 as per API rules)
@@ -109,7 +109,7 @@ export class RedditService {
         }
 
         for (const post of posts) {
-          const normalizedPost = Utils.extractContent(post);
+          const normalizedPost = RedditService.extractContent(post);
           if (!normalizedPost) continue;
 
           const createdUnix = normalizedPost.created_utc;
@@ -175,6 +175,46 @@ export class RedditService {
         e.message,
       );
       throw e;
+    }
+  }
+  /**
+   * Normalizes Reddit API data (posts) into our unified schema.
+   * Ensures consistent fields for downstream processing (Spark/Frontend).
+   */
+  static extractContent(child: any): any {
+    const d = child.data || {};
+    if (!d.id) return null;
+
+    return {
+      event_id: d.name || d.id,
+      event_type: "post",
+      subreddit: d.subreddit || "",
+      author: d.author || null,
+      created_utc: dayjs
+        .unix(parseFloat(d.created_utc || dayjs().unix().toString()))
+        .toISOString(),
+      score: parseInt(d.score || "0"),
+      ingested_at: dayjs().toISOString(),
+      text: `${d.title || ""}\n${d.selftext || ""}`,
+      num_comments: parseInt(d.num_comments || "0"),
+    };
+  }
+  /**
+   * Build Reddit Search Query (CNF: [[A, B], [C]] -> (A OR B) AND (C))
+   */
+  static buildQuery(keywords: any): string {
+    if (!Array.isArray(keywords) || keywords.length === 0) return "";
+
+    const quote = (s: string) => (s.includes(" ") ? `"${s}"` : s);
+
+    if (Array.isArray(keywords[0])) {
+      // CNF Logic: list of lists
+      return (keywords as string[][])
+        .map((group) => `(${group.map(quote).join(" OR ")})`)
+        .join(" AND ");
+    } else {
+      // Legacy Flat List
+      return (keywords as string[]).map(quote).join(" OR ");
     }
   }
 }
