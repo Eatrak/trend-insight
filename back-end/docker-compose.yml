@@ -34,6 +34,22 @@ services:
       - KAFKA_CLUSTERS_0_NAME=local
       - KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS=kafka:9092
 
+  kafka-setup:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: trend-kafka-setup
+    depends_on:
+      - kafka
+    command: >
+      bash -c "
+        echo 'Waiting for Kafka to be ready...'
+        cub kafka-ready -b kafka:9092 1 30
+        echo 'Creating topics...'
+        kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic topic.matched.posts --partitions 8 --replication-factor 1
+        kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic topic.enriched.matched.posts --partitions 1 --replication-factor 1
+        kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic topic.backfilling.tasks --partitions 1 --replication-factor 1
+        echo 'Topics created successfully'
+      "
+
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.13.4
     container_name: trend-elasticsearch
