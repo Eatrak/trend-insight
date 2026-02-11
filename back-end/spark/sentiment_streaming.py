@@ -25,52 +25,48 @@ POST_SCHEMA = StructType([
 
 # UDF for Sentiment Analysis
 def analyze_sentiment(text):
-    if not text:
-        return 0.0
-    try:
-        blob = TextBlob(text)
-        return blob.sentiment.polarity  # Returns float between -1.0 and 1.0
-    except:
-        return 0.0
+    return TextBlob(text).sentiment.polarity if text else 0.0
 
 sentiment_udf = udf(analyze_sentiment, FloatType())
 
 def main():
-    spark = SparkSession.builder \
-        .appName("RedditSentimentAnalyzer") \
-        .getOrCreate()
-    
+    # Create Spark Driver
+    spark = (SparkSession.builder
+        .appName("SentimentAnalyzer")
+        .getOrCreate())
+
+    # Show only warnings and errors in the logs
     spark.sparkContext.setLogLevel("WARN")
 
     # 1. Read from Kafka
-    raw_stream = spark.readStream \
-        .format("kafka") \
-        .option("kafka.bootstrap.servers", KAFKA_URL) \
-        .option("subscribe", "topic.matched.posts") \
-        .option("kafka.group.id", "enrich-matched-posts") \
-        .option("startingOffsets", "earliest") \
-        .load()
+    raw_stream = (spark.readStream
+        .format("kafka")
+        .option("kafka.bootstrap.servers", KAFKA_URL)
+        .option("subscribe", "topic.matched.posts")
+        .option("kafka.group.id", "enrich-matched-posts")
+        .option("startingOffsets", "earliest")
+        .load())
 
     # 2. Parse JSON
-    parsed_stream = raw_stream.select(
+    parsed_stream = (raw_stream.select(
         from_json(col("value").cast("string"), POST_SCHEMA).alias("data")
-    ).select("data.*")
+    ).select("data.*"))
 
     # 3. Apply Transformations
-    enriched_stream = parsed_stream \
-        .withColumn("sentiment_score", sentiment_udf(col("text")))
+    enriched_stream = (parsed_stream
+        .withColumn("sentiment_score", sentiment_udf(col("text"))))
 
     # 4. Write to Kafka
     # Logstash will consume from this topic.
-    query = enriched_stream \
-        .select(to_json(struct("*")).alias("value")) \
-        .writeStream \
-        .format("kafka") \
-        .option("kafka.bootstrap.servers", KAFKA_URL) \
-        .option("topic", "topic.enriched.matched.posts") \
-        .option("checkpointLocation", "/checkpoints/sentiment_analysis") \
-        .outputMode("append") \
-        .start()
+    query = (enriched_stream
+        .select(to_json(struct("*")).alias("value"))
+        .writeStream
+        .format("kafka")
+        .option("kafka.bootstrap.servers", KAFKA_URL)
+        .option("topic", "topic.enriched.matched.posts")
+        .option("checkpointLocation", "/checkpoints/sentiment_analysis")
+        .outputMode("append")
+        .start())
 
     query.awaitTermination()
 
