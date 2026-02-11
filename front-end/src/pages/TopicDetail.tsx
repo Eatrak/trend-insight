@@ -516,8 +516,8 @@ export default function TopicDetail() {
                       fontSize={12}
                       tickLine={false}
                       axisLine={false}
-                      domain={[-1, 1]}
-                      tickFormatter={(value) => getSentimentEmoji(value)}
+                      domain={["auto", "auto"]}
+                      tickFormatter={(value) => value.toFixed(2)}
                     />
                     <CartesianGrid
                       strokeDasharray="3 3"
@@ -540,7 +540,7 @@ export default function TopicDetail() {
                     />
                     {/* Reference Line at 0 for neutral sentiment */}
                     <Line
-                      type="monotone"
+                      type="linear"
                       dataKey="sentiment"
                       name="Sentiment"
                       stroke="var(--chart-1)"
