@@ -7,7 +7,7 @@ The system takes the matched posts from Reddit, applies sentiment analysis by us
 
 ## Architecture
 
-[![](https://mermaid.ink/img/pako:eNqVVm1v2jAQ_iuWpUog8U4JBSGkrqVSN9rRplKlNf1gEhcygp05TlsG_Ped7QQS3rblA_junjvfHfdcWGKXexR38USQcIqGjw5D8ETx2CgGn5IKRoIXB6dHZPNYuDRy8KsBq-eRep4vCwUHmxO6HN06uFg0CMq8nbi3bEIj6XNmU_HuuxTib1Qo0aHCPeRW-RkVc1c98dB3vxB39uYHgc8mV5xF8ZwKuLs37msryph71XG_Nxb9Qs_vjxN1WSpUr-pri5sEQBPB4xAuK24vu4wltxfMhUAQX0koETew_eLuaBSRCWCgqm_kbUZy-d8R6U6pN-KRjHS2y6WDdUKVuTFVQmVz8Hq99Row4Sub8d51pIn1VIS0J08kmu36j7f9qkhl37puyhvySQS26YtpdCpm-_vGxQcRXjlNp5ykU9bpHO_3604D7ZCIGTRPf-eapzXXwn_Xv7eWkBFRYbSQU87yv59GXAVxJDMOibwPfOZilg6SgRpNWiOUWDC1_Wtlx0bEllyQiRr75ISGZKFSytQ6sFWrBwEBVrgRJcKdbnulc34Y-pIqkDltrQcuVJzSEwnMPHAZaAvGlrAP6qn2Mww8WspI0IgySRR1IfyN4EwqVH49EFfq5QDf6DIM9-OdnaFrIgm6CfiH0SSbpFzur77a3--RZszqKP9POmV4bHDHomjPhKKp8x5jTYhMzP_wMp97xkMRMjNpvDIKjU-XAtpxPLQsMhESwqgIehmscjTJABPNHjKbk_k8dOPJFNP1kd8tp6uyHWbg-6vMpLi7-5EC_G1iNuMHail4kJtANa4q9OPAfgLxVwyvqJV-ubGENdr8EFOxMBlm1eDvVZ8FUHOVkDVvP5bwfn24BG9o38NdKWJawpD8nCgRL1VEWONTOgf-d-Ho6Z3psDX4hIT94HyeusFWmkxx940EEUhx6BFJr30CPJ5vtAIYScUVj5nE3Xq70dFRcHeJP3G3bHVqFavVspptC55Gs4QXgDq3KlbdOr9oNa1ap3leb6xL-Le-t1Fp1Zqt2kWzUbPanXa9XsIU-MnFnfnbof99rP8AKfPROw?type=png)](https://mermaid.live/edit#pako:eNqVVm1v2jAQ_iuWpUog8U4JBSGkrqVSN9rRplKlNf1gEhcygp05TlsG_Ped7QQS3rblA_junjvfHfdcWGKXexR38USQcIqGjw5D8ETx2CgGn5IKRoIXB6dHZPNYuDRy8KsBq-eRep4vCwUHmxO6HN06uFg0CMq8nbi3bEIj6XNmU_HuuxTib1Qo0aHCPeRW-RkVc1c98dB3vxB39uYHgc8mV5xF8ZwKuLs37msryph71XG_Nxb9Qs_vjxN1WSpUr-pri5sEQBPB4xAuK24vu4wltxfMhUAQX0koETew_eLuaBSRCWCgqm_kbUZy-d8R6U6pN-KRjHS2y6WDdUKVuTFVQmVz8Hq99Row4Sub8d51pIn1VIS0J08kmu36j7f9qkhl37puyhvySQS26YtpdCpm-_vGxQcRXjlNp5ykU9bpHO_3604D7ZCIGTRPf-eapzXXwn_Xv7eWkBFRYbSQU87yv59GXAVxJDMOibwPfOZilg6SgRpNWiOUWDC1_Wtlx0bEllyQiRr75ISGZKFSytQ6sFWrBwEBVrgRJcKdbnulc34Y-pIqkDltrQcuVJzSEwnMPHAZaAvGlrAP6qn2Mww8WspI0IgySRR1IfyN4EwqVH49EFfq5QDf6DIM9-OdnaFrIgm6CfiH0SSbpFzur77a3--RZszqKP9POmV4bHDHomjPhKKp8x5jTYhMzP_wMp97xkMRMjNpvDIKjU-XAtpxPLQsMhESwqgIehmscjTJABPNHjKbk_k8dOPJFNP1kd8tp6uyHWbg-6vMpLi7-5EC_G1iNuMHail4kJtANa4q9OPAfgLxVwyvqJV-ubGENdr8EFOxMBlm1eDvVZ8FUHOVkDVvP5bwfn24BG9o38NdKWJawpD8nCgRL1VEWONTOgf-d-Ho6Z3psDX4hIT94HyeusFWmkxx940EEUhx6BFJr30CPJ5vtAIYScUVj5nE3Xq70dFRcHeJP3G3bHVqFavVspptC55Gs4QXgDq3KlbdOr9oNa1ap3leb6xL-Le-t1Fp1Zqt2kWzUbPanXa9XsIU-MnFnfnbof99rP8AKfPROw)
+[![](https://mermaid.ink/img/pako:eNqVVltvmzAU_iuWpUmplFtJLyGKInVtKnW9LC2VKq30wQGXsBCbGdM2S_Lfd2xDAiHpNh7A537hfAcW2OM-xT0cCBJP0M2DyxBcSTo2jOGHpIKR6NnF-RE5PBUeTVz8YpTV9UB9P5S1movNCZ2Nrlx8cGA0KPO3_F6xgCYy5Myh4i30KPhfs1DGQ7U7yK35MzkohXrkceh9Jd70NYyikAXnnCXpjAqI3R8PtBQVxP3WeNAfi0GtHw7GGbshlVa_FWqJlzlAgeBpDMEONsHOUsmdOfPAEfhXFMrItVq1uFuaJCQAHajqmrxOSSn_WyK9CfVHPJGJznaxcLFOqDkzomasZC5erTZWQyZCJTPW24Y0k37mIe_JI0mm2_bjTb-aUsk3puvybniQgGzybBqdk8X-vnLxToTfyNNpZOk0dDr7-_2y1UAnJmIKzdPPUvM050KEb_p9awoZEtVGcznhrPz-tMZ5lCayYJDRVcUnLqb5IBlVw8lrhBJrprZ_rWyrh9fhmDACAcxhrbCpXHJBAgWH7IRuyFylWujB0FGvYBgRQIuXUCK8yaaHesLmzv2N0tGHjaw6qRppek4BrztCAbdmZBkmocrWoIDLvRgYCZpQJokCNLi_FJxJpVVeGsSTemXAE53FcdXfly_ogkiCLiP-bjjZfmk0Bstvzvc7pHG03LsVPjUqoNvo7fOiLTPg5sYVHBsXBZ__YWXuFeEuD4VJNVYFhtbPVwXaMty1QgoeMhgpD3pFLEvgKShmnIpmMSdz3xXx0xTzpVLeOJ9X5WSxHKWWIcxlhlndeSbr7Y8EUgp_G6L1RAJbCh6VhlJNsHL9MHQegfyVwrdsqb-CLAOSFt-nVMw3SedssPdbTyKUdGnQWxbvy7daHq7Dlzz0cU-KlNYx5D4jisQL5RHW_YTOqIt7cPT1bnXZCmxiwn5wPsvNYHsFE9x7JVECVBr7RNKLkACyZ2uuAIxScc5TJnGve3qsneDeAn_gXuPQtk6bJx3bPrGsjg3SkzqeK_5x02pbR53OabttdW27a6_q-LeObDVPO8fd7mG3fXx0aNuWVccUMMvFrflB0f8pqz9i39xs?type=png)](https://mermaid.live/edit#pako:eNqVVltvmzAU_iuWpUmplFtJLyGKInVtKnW9LC2VKq30wQGXsBCbGdM2S_Lfd2xDAiHpNh7A537hfAcW2OM-xT0cCBJP0M2DyxBcSTo2jOGHpIKR6NnF-RE5PBUeTVz8YpTV9UB9P5S1movNCZ2Nrlx8cGA0KPO3_F6xgCYy5Myh4i30KPhfs1DGQ7U7yK35MzkohXrkceh9Jd70NYyikAXnnCXpjAqI3R8PtBQVxP3WeNAfi0GtHw7GGbshlVa_FWqJlzlAgeBpDMEONsHOUsmdOfPAEfhXFMrItVq1uFuaJCQAHajqmrxOSSn_WyK9CfVHPJGJznaxcLFOqDkzomasZC5erTZWQyZCJTPW24Y0k37mIe_JI0mm2_bjTb-aUsk3puvybniQgGzybBqdk8X-vnLxToTfyNNpZOk0dDr7-_2y1UAnJmIKzdPPUvM050KEb_p9awoZEtVGcznhrPz-tMZ5lCayYJDRVcUnLqb5IBlVw8lrhBJrprZ_rWyrh9fhmDACAcxhrbCpXHJBAgWH7IRuyFylWujB0FGvYBgRQIuXUCK8yaaHesLmzv2N0tGHjaw6qRppek4BrztCAbdmZBkmocrWoIDLvRgYCZpQJokCNLi_FJxJpVVeGsSTemXAE53FcdXfly_ogkiCLiP-bjjZfmk0Bstvzvc7pHG03LsVPjUqoNvo7fOiLTPg5sYVHBsXBZ__YWXuFeEuD4VJNVYFhtbPVwXaMty1QgoeMhgpD3pFLEvgKShmnIpmMSdz3xXx0xTzpVLeOJ9X5WSxHKWWIcxlhlndeSbr7Y8EUgp_G6L1RAJbCh6VhlJNsHL9MHQegfyVwrdsqb-CLAOSFt-nVMw3SedssPdbTyKUdGnQWxbvy7daHq7Dlzz0cU-KlNYx5D4jisQL5RHW_YTOqIt7cPT1bnXZCmxiwn5wPsvNYHsFE9x7JVECVBr7RNKLkACyZ2uuAIxScc5TJnGve3qsneDeAn_gXuPQtk6bJx3bPrGsjg3SkzqeK_5x02pbR53OabttdW27a6_q-LeObDVPO8fd7mG3fXx0aNuWVccUMMvFrflB0f8pqz9i39xs)
 
 ### How it works
 
@@ -28,12 +28,12 @@ Reads the enriched records from Kafka and forwards them to Elasticsearch.
 
 #### 4. API & Dashboard
 
-The Express.js API uses SQLite to store the topics and it uses Elasticsearch to calculate metrics per time window (1 day, 7 days, 30 days). The metrics are then served to the front-end.
+The Express.js API uses MySQL to store the topics and it uses Elasticsearch to calculate metrics per time window (1 day, 7 days, 30 days). The metrics are then served to the front-end.
 
 ## Tech Stack
 
 - **Front-end**: React, Shadcn UI.
-- **Back-end**: Node.js, Express.js, SQLite.
+- **Back-end**: Node.js, Express.js, MySQL.
 - **DevOps**: Kafka, Spark, Elasticsearch, Logstash, Docker.
 
 ## Getting Started
@@ -56,7 +56,15 @@ The Express.js API uses SQLite to store the topics and it uses Elasticsearch to 
 
     _Note: It takes about 30s for Kafka and Elastic to become healthy._
 
-3.  **Start Frontend**
+3.  **Configure Kibana (Optional)**
+
+    To enable the Kibana dashboard:
+    1.  Go to [http://localhost:5601/app/management/kibana/objects](http://localhost:5601/app/management/kibana/objects)
+    2.  Click **Import**
+    3.  Select `back-end/kibana/dashboard.ndjson`
+    4.  Click **Import**
+
+4.  **Start Frontend**
 
     ```bash
     cd ../front-end
@@ -64,8 +72,9 @@ The Express.js API uses SQLite to store the topics and it uses Elasticsearch to 
     npm run dev
     ```
 
-4.  **Access**
+5.  **Access**
     - **Frontend**: http://localhost:5173
     - **API**: http://localhost:8000
+    - **Kibana**: http://localhost:5601
     - **Kafka UI**: http://localhost:8085
     - **Spark UI**: http://localhost:8080

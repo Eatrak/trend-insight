@@ -241,7 +241,7 @@ app.get("/topics/:id/report", async (req: Request, res: Response) => {
 
     // AGGREGATION QUERY (Advanced Windowed Analytics)
     const result = await esClient.search({
-      index: "reddit-topic-granular",
+      index: "topic-enriched-matched-posts",
       size: 0,
       query: {
         bool: {
