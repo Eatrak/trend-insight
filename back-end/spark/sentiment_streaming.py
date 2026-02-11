@@ -29,7 +29,7 @@ def analyze_sentiment(text):
 
 sentiment_udf = udf(analyze_sentiment, FloatType())
 
-def main():
+if __name__ == "__main__":
     # Create Spark Driver
     spark = (SparkSession.builder
         .appName("SentimentAnalyzer")
@@ -69,6 +69,3 @@ def main():
         .start())
 
     query.awaitTermination()
-
-if __name__ == "__main__":
-    main()
