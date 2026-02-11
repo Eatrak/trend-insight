@@ -152,6 +152,19 @@ services:
       - REDDIT_LIMIT=50000
     restart: unless-stopped
 
+  mysql:
+    image: mysql:8.0
+    container_name: trend-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+
   api:
     build:
       context: ./api
@@ -159,9 +172,13 @@ services:
     hostname: trend-api
     depends_on:
       - elasticsearch
+      - mysql
     environment:
       - ELASTICSEARCH_URL=http://trend-elasticsearch:9200
-      - TOPICS_DB_PATH=/data/topics.db
+      - MYSQL_HOST=${MYSQL_HOST}
+      - MYSQL_USER=${MYSQL_USER}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+      - MYSQL_DATABASE=${MYSQL_DATABASE}
       - BASIC_AUTH_USER=${BASIC_AUTH_USER}
       - BASIC_AUTH_PASS=${BASIC_AUTH_PASS}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
@@ -175,3 +192,4 @@ volumes:
   es_data:
   api_data:
   spark_checkpoint:
+  mysql_data:

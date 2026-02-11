@@ -1,6 +1,6 @@
 import OpenAI from "openai";
 import express, { Request, Response } from "express";
-import Database from "better-sqlite3";
+import mysql from "mysql2/promise";
 import { Client } from "@elastic/elasticsearch";
 import dotenv from "dotenv";
 import { Kafka } from "kafkajs";
@@ -17,7 +17,6 @@ app.use((req, res, next) => {
 });
 
 const PORT = process.env.PORT || 8000;
-const TOPICS_DB_PATH = process.env.TOPICS_DB_PATH || "/data/topics.db";
 const ELASTICSEARCH_URL =
   process.env.ELASTICSEARCH_URL || "http://elasticsearch:9200";
 
@@ -31,65 +30,13 @@ const openai = new OpenAI({
 const DEFAULT_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
 
 // ----------------------------------------------------------------------------
-// Storage: SQLite (Topics)
+// Storage: MySQL (Topics)
 // ----------------------------------------------------------------------------
-const db = new Database(TOPICS_DB_PATH);
-
-// Initialize DB Schema
-db.exec(`
-  CREATE TABLE IF NOT EXISTS topics (
-    id TEXT PRIMARY KEY,
-    description TEXT,
-    keywords TEXT, -- JSON array or CSV
-    subreddits TEXT, -- CSV
-    filters_json TEXT, -- JSON string
-    update_frequency_seconds INTEGER DEFAULT 60,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    backfill_status TEXT DEFAULT 'IDLE', -- IDLE, PENDING, COMPLETED, ERROR
-    backfill_percentage REAL DEFAULT 0.0
-  );
-`);
-
-// Migration: Add backfill_status if missing (for existing DBs)
-try {
-  db.exec("ALTER TABLE topics ADD COLUMN backfill_status TEXT DEFAULT 'IDLE'");
-} catch (e: any) {
-  // Ignore
-}
-
-// Migration: Add backfill_percentage if missing
-try {
-  db.exec("ALTER TABLE topics ADD COLUMN backfill_percentage REAL DEFAULT 0.0");
-} catch (e: any) {
-  // Ignore
-}
-
-// ... (Rest of code)
-
-// 9. PATCH /topics/:id/status
-app.patch("/topics/:id/status", (req: Request, res: Response) => {
-  try {
-    const { status, percentage } = req.body;
-    const id = req.params.id;
-
-    if (status) {
-      db.prepare("UPDATE topics SET backfill_status = ? WHERE id = ?").run(
-        status,
-        id,
-      );
-    }
-
-    if (percentage !== undefined) {
-      db.prepare("UPDATE topics SET backfill_percentage = ? WHERE id = ?").run(
-        percentage,
-        id,
-      );
-    }
-
-    res.json({ success: true });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
+const db = mysql.createPool({
+  host: process.env.MYSQL_HOST || "trend-mysql",
+  user: process.env.MYSQL_USER || "trend_user",
+  password: process.env.MYSQL_PASSWORD || "trend_password",
+  database: process.env.MYSQL_DATABASE || "trend_insight",
 });
 
 // ----------------------------------------------------------------------------
@@ -102,22 +49,21 @@ const kafka = new Kafka({
 const producer = kafka.producer();
 
 const connectProducer = async () => {
-  let retries = 5;
-  while (retries > 0) {
+  while (true) {
     try {
       await producer.connect();
-      console.log("Kafka Producer connected");
+      console.log("[API] Kafka Producer connected");
       return;
     } catch (error) {
-      console.error("Kafka Producer connection failed, retrying...", error);
-      retries--;
+      console.error(
+        "[API] Kafka Producer connection failed, retrying...",
+        error,
+      );
+
       await new Promise((res) => setTimeout(res, 5000));
     }
   }
-  console.error("Could not connect to Kafka after multiple retries.");
 };
-
-connectProducer();
 
 // ----------------------------------------------------------------------------
 // Storage: Elasticsearch (Metrics, Trends)
@@ -144,12 +90,10 @@ app.get("/subreddits", (req: Request, res: Response) => {
 });
 
 // 2. GET /topics
-app.get("/topics", (req: Request, res: Response) => {
+app.get("/topics", async (req: Request, res: Response) => {
   try {
-    const stmt = db.prepare("SELECT * FROM topics");
-    const rows = stmt.all();
-    // Parse JSON fields
-    const topics = rows.map((r: any) => ({
+    const [rows] = await db.query("SELECT * FROM topics");
+    const topics = (rows as any[]).map((r: any) => ({
       ...r,
       keywords: isJson(r.keywords) ? JSON.parse(r.keywords) : r.keywords,
       subreddits: (r.subreddits || "").split(","),
@@ -162,7 +106,7 @@ app.get("/topics", (req: Request, res: Response) => {
 });
 
 // 1. POST /topics
-app.post("/topics", (req: Request, res: Response) => {
+app.post("/topics", async (req: Request, res: Response) => {
   try {
     const { id, description, keywords, subreddits, filters, update_frequency } =
       req.body;
@@ -175,20 +119,20 @@ app.post("/topics", (req: Request, res: Response) => {
       return;
     }
 
-    const stmt = db.prepare(`
+    const sql = `
       INSERT INTO topics (id, description, keywords, subreddits, filters_json, update_frequency_seconds, created_at, backfill_status)
       VALUES (?, ?, ?, ?, ?, ?, ?, 'IDLE')
-    `);
+    `;
 
-    stmt.run(
+    await db.execute(sql, [
       id,
       description || "",
       Array.isArray(keywords) ? JSON.stringify(keywords) : keywords,
       Array.isArray(subreddits) ? subreddits.join(",") : subreddits,
       JSON.stringify(filters || {}),
       update_frequency || 60, // Default to 60s
-      new Date().toISOString(),
-    );
+      new Date().toISOString().slice(0, 19).replace("T", " "), // MySQL Format
+    ]);
 
     res.status(201).json({ message: "Topic created", id });
   } catch (error: any) {
@@ -197,10 +141,12 @@ app.post("/topics", (req: Request, res: Response) => {
 });
 
 // 3. GET /topics/{id}
-app.get("/topics/:id", (req: Request, res: Response) => {
+app.get("/topics/:id", async (req: Request, res: Response) => {
   try {
-    const stmt = db.prepare("SELECT * FROM topics WHERE id = ?");
-    const topic = stmt.get(req.params.id) as any;
+    const [rows] = await db.execute("SELECT * FROM topics WHERE id = ?", [
+      req.params.id,
+    ]);
+    const topic = (rows as any[])[0];
 
     if (!topic) {
       res.status(404).json({ error: "Topic not found" });
@@ -225,17 +171,18 @@ app.post("/topics/:id/backfill", async (req: Request, res: Response) => {
   try {
     const id = req.params.id;
     // 1. Get Topic
-    const stmt = db.prepare("SELECT * FROM topics WHERE id = ?");
-    const topic = stmt.get(id) as any;
+    const [rows] = await db.execute("SELECT * FROM topics WHERE id = ?", [id]);
+    const topic = (rows as any[])[0];
     if (!topic) {
       res.status(404).json({ error: "Topic not found" });
       return;
     }
 
     // 2. Update Status -> PENDING
-    db.prepare(
+    await db.execute(
       "UPDATE topics SET backfill_status = 'PENDING' WHERE id = ?",
-    ).run(id);
+      [id],
+    );
 
     // 3. Send Task to Kafka (Global Scan)
     // We send all allowed subreddits so that the backfill matches the real-time monitoring scope.
@@ -262,22 +209,22 @@ app.post("/topics/:id/backfill", async (req: Request, res: Response) => {
 });
 
 // 9. PATCH /topics/:id/status
-app.patch("/topics/:id/status", (req: Request, res: Response) => {
+app.patch("/topics/:id/status", async (req: Request, res: Response) => {
   try {
     const { status, percentage } = req.body;
     const id = req.params.id;
 
     if (status) {
-      db.prepare("UPDATE topics SET backfill_status = ? WHERE id = ?").run(
+      await db.execute("UPDATE topics SET backfill_status = ? WHERE id = ?", [
         status,
         id,
-      );
+      ]);
     }
 
     if (percentage !== undefined) {
-      db.prepare("UPDATE topics SET backfill_percentage = ? WHERE id = ?").run(
-        percentage,
-        id,
+      await db.execute(
+        "UPDATE topics SET backfill_percentage = ? WHERE id = ?",
+        [percentage, id],
       );
     }
 
@@ -286,9 +233,8 @@ app.patch("/topics/:id/status", (req: Request, res: Response) => {
     res.status(500).json({ error: error.message });
   }
 });
-// 4. GET /topics/{id}/report
+
 // 4. GET /topics/:id/report
-// Reads metrics from Elasticsearch (reddit-topic-metrics*)
 app.get("/topics/:id/report", async (req: Request, res: Response) => {
   try {
     const topicId = req.params.id;
@@ -452,8 +398,6 @@ app.get("/topics/:id/report", async (req: Request, res: Response) => {
 });
 
 // 6. POST /generate-config
-
-// 6. POST /generate-config
 app.post("/generate-config", async (req: Request, res: Response) => {
   try {
     const { description } = req.body;
@@ -608,7 +552,53 @@ function isJson(str: string) {
   return true;
 }
 
-app.listen(PORT, () => {
-  console.log(`[API] Listening on ${PORT}`);
-  console.log(`[API] DB Path: ${TOPICS_DB_PATH}`);
-});
+async function initDB() {
+  // Retry Logic for MySQL
+  while (true) {
+    try {
+      // Initialize DB Schema (Create Table)
+      await db.query(`
+        CREATE TABLE IF NOT EXISTS topics (
+          id VARCHAR(255) PRIMARY KEY,
+          description TEXT,
+          keywords TEXT, -- JSON array
+          subreddits TEXT, -- CSV
+          filters_json TEXT, -- JSON string
+          update_frequency_seconds INT DEFAULT 60,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          backfill_status VARCHAR(50) DEFAULT 'IDLE', -- IDLE, PENDING, COMPLETED, ERROR
+          backfill_percentage FLOAT DEFAULT 0.0
+        )
+      `);
+      console.log("[API] MySQL DB Initialized");
+      break; // Success
+    } catch (e: any) {
+      console.error(`[API] MySQL connection failed. Retrying...`, e.message);
+      await new Promise((res) => setTimeout(res, 5000));
+    }
+  }
+}
+
+// ----------------------------------------------------------------------------
+// Start Server
+// ----------------------------------------------------------------------------
+const startServer = async () => {
+  try {
+    console.log("[API] Starting server...");
+
+    // Initialize DB
+    await initDB();
+
+    // Start Kafka Producer
+    await connectProducer();
+
+    app.listen(PORT, () => {
+      console.log(`[API] Listening on ${PORT}`);
+    });
+  } catch (e) {
+    console.error("[API] Failed to start server:", e);
+    process.exit(1);
+  }
+};
+
+startServer();
