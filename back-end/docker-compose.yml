@@ -113,9 +113,9 @@ services:
         pip install requests textblob &&
         /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077 --webui-port 8081
 
-  spark-streaming:
+  spark-driver:
     image: apache/spark:3.5.0
-    container_name: trend-spark-streaming
+    container_name: trend-spark-driver
     depends_on:
       - kafka
       - spark-master
