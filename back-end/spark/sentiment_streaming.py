@@ -23,7 +23,7 @@ POST_SCHEMA = StructType([
     StructField("event_type", StringType(), True)
 ])
 
-# UDF for Sentiment Analysis
+# UDF for sentiment analysis
 def analyze_sentiment(text):
     return TextBlob(text).sentiment.polarity if text else 0.0
 
@@ -38,7 +38,7 @@ if __name__ == "__main__":
     # Show only warnings and errors in the logs
     spark.sparkContext.setLogLevel("WARN")
 
-    # 1. Read from Kafka
+    # 1. Get data frame of raw records from Kafka
     raw_stream = (spark.readStream
         .format("kafka")
         .option("kafka.bootstrap.servers", KAFKA_URL)
@@ -47,17 +47,16 @@ if __name__ == "__main__":
         .option("startingOffsets", "earliest")
         .load())
 
-    # 2. Parse JSON
-    parsed_stream = (raw_stream.select(
+    # 2. Extract data columns from JSON
+    formatted_stream = (raw_stream.select(
         from_json(col("value").cast("string"), POST_SCHEMA).alias("data")
     ).select("data.*"))
 
-    # 3. Apply Transformations
-    enriched_stream = (parsed_stream
+    # 3. Apply sentiment analysis
+    enriched_stream = (formatted_stream
         .withColumn("sentiment_score", sentiment_udf(col("text"))))
 
     # 4. Write to Kafka
-    # Logstash will consume from this topic.
     query = (enriched_stream
         .select(to_json(struct("*")).alias("value"))
         .writeStream
