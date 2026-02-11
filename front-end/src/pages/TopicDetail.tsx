@@ -387,7 +387,7 @@ export default function TopicDetail() {
         <div className="grid gap-4 md:grid-cols-1">
           <Card className="col-span-1">
             <CardHeader>
-              <CardTitle>Matched Posts Over Time</CardTitle>
+              <CardTitle>Matched Posts</CardTitle>
             </CardHeader>
             <CardContent className="pl-2">
               <div className="h-[300px] w-full">
@@ -441,7 +441,7 @@ export default function TopicDetail() {
 
           <Card className="col-span-1">
             <CardHeader>
-              <CardTitle>Engagement Over Time</CardTitle>
+              <CardTitle>Engagement</CardTitle>
             </CardHeader>
             <CardContent className="pl-2">
               <div className="h-[300px] w-full">
