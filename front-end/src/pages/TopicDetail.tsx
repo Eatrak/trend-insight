@@ -12,6 +12,11 @@ import {
   YAxis,
 } from "recharts";
 import dayjs from "dayjs";
+import isoWeek from "dayjs/plugin/isoWeek";
+import utc from "dayjs/plugin/utc";
+
+dayjs.extend(isoWeek);
+dayjs.extend(utc);
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -35,7 +40,7 @@ export default function TopicDetail() {
   const [topic, setTopic] = useState<Topic | null>(null);
   const [metrics, setMetrics] = useState<Metric[]>([]);
   const [selectedWindow, setSelectedWindow] = useState<string>("1d");
-  const [selectedRange, setSelectedRange] = useState<number>(7);
+  const [selectedRange, setSelectedRange] = useState<string>("this_week");
   const [isBackfilling, setIsBackfilling] = useState(false);
 
   const fetchTopic = async () => {
@@ -74,15 +79,33 @@ export default function TopicDetail() {
     }
   }, [id]);
 
-  // Auto-adjust range if it's too small for the selected window
+  // Auto-select sensible range when window changes
   useEffect(() => {
-    if (selectedWindow === "1w" && selectedRange < 14) {
-      setSelectedRange(30); // Default to 30d for weekly view
+    if (selectedWindow === "1m") {
+      // For monthly view, default to "Last 12 Months"
+      if (
+        selectedRange !== "3m" &&
+        selectedRange !== "6m" &&
+        selectedRange !== "12m"
+      ) {
+        setSelectedRange("12m");
+      }
+    } else if (selectedWindow === "1w") {
+      // For weekly view, default to "This Month"
+      if (
+        selectedRange !== "this_month" &&
+        selectedRange !== "3m" &&
+        selectedRange !== "6m"
+      ) {
+        setSelectedRange("this_month");
+      }
+    } else {
+      // For daily, default to "This Week"
+      if (["this_month", "3m", "6m", "12m"].includes(selectedRange as string)) {
+        setSelectedRange("this_week");
+      }
     }
-    if (selectedWindow === "1m" && selectedRange < 60) {
-      setSelectedRange(90); // Default to 90d for monthly view
-    }
-  }, [selectedWindow, selectedRange]);
+  }, [selectedWindow]);
 
   // Always poll every 5s
   useInterval(refreshData, 5000);
@@ -97,12 +120,26 @@ export default function TopicDetail() {
   const ALL_WINDOW_TYPES = ["1d", "1w", "1m"];
   const availableWindows = new Set(metrics.map((m) => m.window_type));
 
-  // Time Range types (Zoom)
-  const TIME_RANGES = [
-    { label: "7D", value: 7 },
-    { label: "30D", value: 30 },
-    { label: "90D", value: 90 },
+  // Dynamic Time Ranges based on Window
+  let availableRanges = [
+    { label: "This Week", value: "this_week" },
+    { label: "This Month", value: "this_month" },
+    { label: "Last 3 Months", value: "3m" },
   ];
+
+  if (selectedWindow === "1w") {
+    availableRanges = [
+      { label: "This Month", value: "this_month" },
+      { label: "Last 3 Months", value: "3m" },
+      { label: "Last 6 Months", value: "6m" },
+    ];
+  } else if (selectedWindow === "1m") {
+    availableRanges = [
+      { label: "Last 3 Months", value: "3m" },
+      { label: "Last 6 Months", value: "6m" },
+      { label: "Last 12 Months", value: "12m" },
+    ];
+  }
 
   // Filter metrics by selected window (Resolution)
   const filteredMetrics = metrics.filter(
@@ -120,20 +157,39 @@ export default function TopicDetail() {
   }
 
   // Filter and Time Range (Zoom)
-  const now = dayjs();
-  const todayMidnight = now.startOf("day");
+  // Loop range cutoff logic
+  // Filter and Time Range (Zoom)
+  // Loop range cutoff logic
+  const now = dayjs.utc();
+  let rangeCutoff = now.startOf("day");
 
-  // Range Cutoff = Midnight Today - N Days
-  // E.g. 7d -> Today - 7 days
-  const rangeCutoff = todayMidnight.subtract(selectedRange, "day");
+  if (selectedRange === "this_week") {
+    rangeCutoff = now.startOf("isoWeek");
+  } else if (selectedRange === "this_month") {
+    rangeCutoff = now.startOf("month");
+  } else if (selectedRange === "3m") {
+    rangeCutoff = now.startOf("month").subtract(2, "month");
+  } else if (selectedRange === "6m") {
+    rangeCutoff = now.startOf("month").subtract(5, "month");
+  } else if (selectedRange === "12m") {
+    rangeCutoff = now.startOf("month").subtract(11, "month");
+  }
 
   // 2. Generate Complete Timeline (Zero-Filling)
   // We align chart points to the known metrics for accuracy, filling gaps with 0.
   const chartData = [];
   let runner = rangeCutoff;
-  const endTime = todayMidnight;
+  // End Time: Extend to the end of the current unit to show future empty buckets
+  let rangeEnd = now.endOf("day");
+  if (selectedRange === "this_week") {
+    rangeEnd = now.endOf("isoWeek");
+  } else if (
+    ["this_month", "3m", "6m", "12m"].includes(selectedRange as string)
+  ) {
+    rangeEnd = now.endOf("month");
+  }
 
-  while (runner.isBefore(endTime) || runner.isSame(endTime)) {
+  while (runner.isBefore(rangeEnd) || runner.isSame(rangeEnd)) {
     // Correct Matching Logic: Does the Metric belong to this Bar?
     // Bar Interval: [runner, runner + step)
     // Metric Point: mStart
@@ -141,7 +197,7 @@ export default function TopicDetail() {
     const runnerEnd = runner.add(stepValue, stepUnit);
 
     const match = filteredMetrics.find((m) => {
-      const mStart = dayjs(m.start);
+      const mStart = dayjs.utc(m.start);
       return (
         (mStart.isSame(runner) || mStart.isAfter(runner)) &&
         mStart.isBefore(runnerEnd)
@@ -269,22 +325,16 @@ export default function TopicDetail() {
           <div className="flex items-center gap-2 border-l pl-4 ml-2">
             <span className="text-sm text-muted-foreground">Range:</span>
             <div className="flex items-center rounded-lg border bg-card p-1">
-              {TIME_RANGES.map((r) => {
-                let isDisabled = false;
-                if (selectedWindow === "1w" && r.value < 14) isDisabled = true; // Need > 1 week
-                if (selectedWindow === "1m" && r.value < 60) isDisabled = true; // Need > 1 month
-
+              {availableRanges.map((r) => {
+                const isActive = selectedRange === r.value;
                 return (
                   <button
-                    key={r.label}
-                    disabled={isDisabled}
+                    key={r.value}
                     onClick={() => setSelectedRange(r.value)}
                     className={`px-3 py-1 text-sm font-medium rounded-md transition-colors ${
-                      selectedRange === r.value
+                      isActive
                         ? "bg-secondary text-secondary-foreground"
-                        : isDisabled
-                          ? "text-muted-foreground/30 cursor-not-allowed"
-                          : "text-muted-foreground hover:text-foreground"
+                        : "text-muted-foreground hover:text-foreground"
                     }`}
                   >
                     {r.label}
@@ -400,7 +450,7 @@ export default function TopicDetail() {
                   <BarChart data={chartData}>
                     <XAxis
                       dataKey="end"
-                      tickFormatter={(val) => dayjs(val).format("MMM D")}
+                      tickFormatter={(val) => dayjs(val).utc().format("MMM D")}
                       stroke="#888888"
                       fontSize={12}
                       tickLine={false}
@@ -426,7 +476,7 @@ export default function TopicDetail() {
                       }}
                       itemStyle={{ color: "hsl(var(--foreground))" }}
                       labelFormatter={(label) =>
-                        dayjs(label).format("MMM D, YYYY h:mm A")
+                        dayjs(label).utc().format("MMM D, YYYY h:mm A")
                       }
                     />
                     <Bar
@@ -454,7 +504,7 @@ export default function TopicDetail() {
                   <BarChart data={chartData}>
                     <XAxis
                       dataKey="end"
-                      tickFormatter={(val) => dayjs(val).format("MMM D")}
+                      tickFormatter={(val) => dayjs(val).utc().format("MMM D")}
                       stroke="#888888"
                       fontSize={12}
                       tickLine={false}
@@ -480,7 +530,7 @@ export default function TopicDetail() {
                       }}
                       itemStyle={{ color: "hsl(var(--foreground))" }}
                       labelFormatter={(label) =>
-                        dayjs(label).format("MMM D, YYYY h:mm A")
+                        dayjs(label).utc().format("MMM D, YYYY h:mm A")
                       }
                     />
                     <Bar
@@ -510,7 +560,7 @@ export default function TopicDetail() {
                   <LineChart data={chartData}>
                     <XAxis
                       dataKey="end"
-                      tickFormatter={(val) => dayjs(val).format("MMM D")}
+                      tickFormatter={(val) => dayjs(val).utc().format("MMM D")}
                       stroke="#888888"
                       fontSize={12}
                       tickLine={false}
@@ -536,7 +586,7 @@ export default function TopicDetail() {
                       }}
                       itemStyle={{ color: "hsl(var(--foreground))" }}
                       labelFormatter={(label) =>
-                        dayjs(label).format("MMM D, YYYY h:mm A")
+                        dayjs(label).utc().format("MMM D, YYYY h:mm A")
                       }
                       formatter={(value: any) => [
                         `${getSentimentEmoji(Number(value))} ${Number(value).toFixed(2)}`,
@@ -571,7 +621,7 @@ export default function TopicDetail() {
                       dataKey="end"
                       type="number"
                       domain={[rangeCutoff.valueOf(), now.valueOf()]}
-                      tickFormatter={(val) => dayjs(val).format("MMM D")}
+                      tickFormatter={(val) => dayjs(val).utc().format("MMM D")}
                       scale="time"
                       stroke="#888888"
                       fontSize={12}
@@ -597,7 +647,7 @@ export default function TopicDetail() {
                       }}
                       itemStyle={{ color: "hsl(var(--foreground))" }}
                       labelFormatter={(label) =>
-                        dayjs(label).format("MMM D, YYYY h:mm A")
+                        dayjs(label).utc().format("MMM D, YYYY h:mm A")
                       }
                       formatter={(value: any) => [
                         `${(Number(value) || 0).toFixed(2)}x`,

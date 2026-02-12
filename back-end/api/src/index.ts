@@ -256,126 +256,100 @@ app.get("/topics/:id/report", async (req: Request, res: Response) => {
             order: { _key: "asc" },
             min_doc_count: 0,
             extended_bounds: {
-              min: "now-30d/d",
-              max: "now/d",
+              min: "now-2y/d",
+              max: "now+1d/d",
             },
           },
           aggs: {
             mentions: { value_count: { field: "topic_id.keyword" } },
             engagement: { sum: { field: "engagement" } },
             sentiment_sum: { sum: { field: "sentiment_score" } },
-            avg_sentiment: { avg: { field: "sentiment_score" } },
-            // Moving Windows (Pipeline Aggregations)
-            moving_mentions_7d: {
-              moving_fn: {
-                buckets_path: "mentions",
-                window: 7,
-                script: "MovingFunctions.sum(values)",
-              },
+          },
+        },
+        weekly_buckets: {
+          date_histogram: {
+            field: "@timestamp",
+            calendar_interval: "1w",
+            order: { _key: "asc" },
+            min_doc_count: 0,
+            extended_bounds: {
+              min: "now-2y/d",
+              max: "now+1d/d",
             },
-            moving_engagement_7d: {
-              moving_fn: {
-                buckets_path: "engagement",
-                window: 7,
-                script: "MovingFunctions.sum(values)",
-              },
+          },
+          aggs: {
+            mentions: { value_count: { field: "topic_id.keyword" } },
+            engagement: { sum: { field: "engagement" } },
+            sentiment_sum: { sum: { field: "sentiment_score" } },
+          },
+        },
+        monthly_buckets: {
+          date_histogram: {
+            field: "@timestamp",
+            calendar_interval: "1M",
+            order: { _key: "asc" },
+            min_doc_count: 0,
+            extended_bounds: {
+              min: "now-2y/d",
+              max: "now+1d/d",
             },
-            moving_sentiment_7d: {
-              moving_fn: {
-                buckets_path: "sentiment_sum",
-                window: 7,
-                script: "MovingFunctions.sum(values)",
-              },
-            },
-            moving_mentions_30d: {
-              moving_fn: {
-                buckets_path: "mentions",
-                window: 30,
-                script: "MovingFunctions.sum(values)",
-              },
-            },
-            moving_engagement_30d: {
-              moving_fn: {
-                buckets_path: "engagement",
-                window: 30,
-                script: "MovingFunctions.sum(values)",
-              },
-            },
-            moving_sentiment_30d: {
-              moving_fn: {
-                buckets_path: "sentiment_sum",
-                window: 30,
-                script: "MovingFunctions.sum(values)",
-              },
-            },
+          },
+          aggs: {
+            mentions: { value_count: { field: "topic_id.keyword" } },
+            engagement: { sum: { field: "engagement" } },
+            sentiment_sum: { sum: { field: "sentiment_score" } },
           },
         },
       },
     });
 
     const metrics: any[] = [];
-    const buckets = (result.aggregations as any)?.daily_buckets?.buckets || [];
+    const aggregations = result.aggregations as any;
 
-    // Track previous values for growth calculation
-    const prevMap: Record<string, number> = { "1d": 0, "1w": 0, "1m": 0 };
+    const processBuckets = (buckets: any[], windowType: string) => {
+      // Track previous values for growth calculation
+      let prevMentions = 0;
 
-    for (const bucket of buckets) {
-      const timestamp = bucket.key_as_string;
-      const endTimestamp = new Date(bucket.key + 86400000).toISOString();
+      for (const bucket of buckets) {
+        const timestamp = bucket.key_as_string;
+        // Approximation for end timestamp (duration depends on window)
+        let durationMs = 86400000;
+        if (windowType === "1w") durationMs = 7 * 86400000;
+        if (windowType === "1m") durationMs = 30 * 86400000;
 
-      const processWindow = (
-        type: string,
-        mentions: number,
-        engagement: number,
-        sentimentSum: number,
-      ) => {
-        const prevMentions = prevMap[type] || 0;
-        const growth = prevMentions === 0 ? 1.0 : mentions / prevMentions;
+        const endTimestamp = new Date(bucket.key + durationMs).toISOString();
+
+        const mentions = bucket.doc_count;
+        const engagement = bucket.engagement?.value || 0;
+        const sentimentSum = bucket.sentiment_sum?.value || 0;
         const sentiment = mentions > 0 ? sentimentSum / mentions : 0;
+
+        const growth = prevMentions === 0 ? 1.0 : mentions / prevMentions;
 
         metrics.push({
           topic_id: topicId,
-          start:
-            type === "1d"
-              ? timestamp
-              : new Date(
-                  bucket.key - (type === "1w" ? 6 : 29) * 86400000,
-                ).toISOString(),
+          start: timestamp,
           end: endTimestamp,
           mentions,
           engagement,
           sentiment,
           growth,
           trend_score: engagement * growth,
-          window_type: type,
+          window_type: windowType,
         });
 
-        prevMap[type] = mentions;
-      };
+        prevMentions = mentions;
+      }
+    };
 
-      // 1. Daily
-      processWindow(
-        "1d",
-        bucket.doc_count,
-        bucket.engagement?.value || 0,
-        bucket.sentiment_sum?.value || 0,
-      );
-
-      // 2. Weekly
-      processWindow(
-        "1w",
-        bucket.moving_mentions_7d?.value || 0,
-        bucket.moving_engagement_7d?.value || 0,
-        bucket.moving_sentiment_7d?.value || 0,
-      );
-
-      // 3. Monthly
-      processWindow(
-        "1m",
-        bucket.moving_mentions_30d?.value || 0,
-        bucket.moving_engagement_30d?.value || 0,
-        bucket.moving_sentiment_30d?.value || 0,
-      );
+    if (aggregations?.daily_buckets?.buckets) {
+      processBuckets(aggregations.daily_buckets.buckets, "1d");
+    }
+    if (aggregations?.weekly_buckets?.buckets) {
+      processBuckets(aggregations.weekly_buckets.buckets, "1w");
+    }
+    if (aggregations?.monthly_buckets?.buckets) {
+      processBuckets(aggregations.monthly_buckets.buckets, "1m");
     }
 
     // Sort descending by end time for the report
