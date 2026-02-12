@@ -84,6 +84,8 @@ It's used to visualize metrics from Elastisearch data.
     3.  Select `back-end/kibana/dashboard.ndjson`
     4.  Click **Import**
 
+    ![Trend Insight Kibana](./images/kibana.png)
+
 4.  **Start Frontend**
 
     ```bash
