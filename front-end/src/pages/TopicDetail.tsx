@@ -496,7 +496,7 @@ export default function TopicDetail() {
 
           <Card className="col-span-1">
             <CardHeader>
-              <CardTitle>Sentiment</CardTitle>
+              <CardTitle>Average Sentiment</CardTitle>
             </CardHeader>
 
             <CardContent className="pl-2">
@@ -535,14 +535,14 @@ export default function TopicDetail() {
                       }
                       formatter={(value: any) => [
                         `${getSentimentEmoji(Number(value))} ${Number(value).toFixed(2)}`,
-                        "Sentiment",
+                        "Average Sentiment",
                       ]}
                     />
                     {/* Reference Line at 0 for neutral sentiment */}
                     <Line
                       type="linear"
                       dataKey="sentiment"
-                      name="Sentiment"
+                      name="Average Sentiment"
                       stroke="var(--chart-1)"
                       strokeWidth={2}
                       dot={{ strokeWidth: 2, r: 4 }}
