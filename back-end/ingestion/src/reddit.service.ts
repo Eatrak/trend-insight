@@ -112,7 +112,7 @@ export class RedditService {
           const normalizedPost = RedditService.extractContent(post);
           if (!normalizedPost) continue;
 
-          const createdUnix = normalizedPost.created_utc;
+          const createdUnix = dayjs(normalizedPost.created_utc).unix();
 
           // Stop if we reached beyond the cutoff timestamp (older posts)
           if (createdUnix < cutoffTimestamp) {
