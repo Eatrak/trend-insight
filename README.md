@@ -74,7 +74,7 @@ It's used to visualize metrics from Elastisearch data.
     docker-compose up -d --build
     ```
 
-    _Note: It takes about 2 minutes for Kafka and Elastic to become healthy._
+    _Note: It could take at least 2 minutes for the services to become ready._
 
 3.  **Configure Kibana (Optional)**
 
