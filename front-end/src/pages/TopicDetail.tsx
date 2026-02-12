@@ -11,7 +11,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { format } from "date-fns";
+import dayjs from "dayjs";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -110,56 +110,61 @@ export default function TopicDetail() {
   );
 
   // 1. Determine Step Size based on Window
-  let stepMs = 24 * 60 * 60 * 1000; // 1d
-  if (selectedWindow === "1w") stepMs = 7 * 24 * 60 * 60 * 1000;
-  if (selectedWindow === "1m") stepMs = 30 * 24 * 60 * 60 * 1000;
+  let stepUnit: "day" | "week" | "month" = "day";
+  let stepValue = 1;
+
+  if (selectedWindow === "1w") {
+    stepUnit = "week";
+  } else if (selectedWindow === "1m") {
+    stepUnit = "month";
+  }
 
   // Filter and Time Range (Zoom)
-  const now = new Date();
+  const now = dayjs();
+  const todayMidnight = now.startOf("day");
 
-  // Align to Midnight for strict day boundaries
-  const todayMidnight = new Date(now);
-  todayMidnight.setHours(0, 0, 0, 0);
-
-  // Range Cutoff = Midnight Today - (N-1) Days
-  // E.g. 7d -> Today + 6 past days = 7 bars
-  const rangeCutoff = new Date(todayMidnight);
-  rangeCutoff.setDate(todayMidnight.getDate() - (selectedRange - 1));
+  // Range Cutoff = Midnight Today - N Days
+  // E.g. 7d -> Today - 7 days
+  const rangeCutoff = todayMidnight.subtract(selectedRange, "day");
 
   // 2. Generate Complete Timeline (Zero-Filling)
   // We align chart points to the known metrics for accuracy, filling gaps with 0.
   const chartData = [];
-  let runner = rangeCutoff.getTime();
-  const endTime = todayMidnight.getTime();
+  let runner = rangeCutoff;
+  const endTime = todayMidnight;
 
-  while (runner <= endTime) {
+  while (runner.isBefore(endTime) || runner.isSame(endTime)) {
     // Correct Matching Logic: Does the Metric belong to this Bar?
-    // Bar Interval: [runner, runner + stepMs)
+    // Bar Interval: [runner, runner + step)
     // Metric Point: mStart
     // We match if the Metric started within this bar's timeframe.
-    // This handles Timezone offsets (e.g. Metric 01:00 belongs to Bar 00:00).
+    const runnerEnd = runner.add(stepValue, stepUnit);
+
     const match = filteredMetrics.find((m) => {
-      const mStart = new Date(m.start).getTime();
-      return mStart >= runner && mStart < runner + stepMs;
+      const mStart = dayjs(m.start);
+      return (
+        (mStart.isSame(runner) || mStart.isAfter(runner)) &&
+        mStart.isBefore(runnerEnd)
+      );
     });
 
     chartData.push({
-      end: runner,
+      end: runner.valueOf(), // recharts works well with timestamps
       mentions: match ? match.mentions : 0,
       engagement: match ? match.engagement : 0,
       sentiment: match ? match.sentiment || 0 : 0,
       growth: match ? match.growth || 0 : 0,
     });
 
-    runner += stepMs;
+    runner = runner.add(stepValue, stepUnit);
   }
 
   // Calculate Weighted Average Sentiment for the current view
   const visibleMetrics = metrics.filter(
     (m) =>
       m.window_type === "1d" &&
-      new Date(m.start).getTime() >= rangeCutoff.getTime() &&
-      new Date(m.start).getTime() < now.getTime(),
+      dayjs(m.start).isAfter(rangeCutoff.subtract(1, "second")) &&
+      dayjs(m.start).isBefore(now),
   );
 
   const totalMentionsInView = visibleMetrics.reduce(
@@ -395,7 +400,7 @@ export default function TopicDetail() {
                   <BarChart data={chartData}>
                     <XAxis
                       dataKey="end"
-                      tickFormatter={(val) => format(new Date(val), "MMM d")}
+                      tickFormatter={(val) => dayjs(val).format("MMM D")}
                       stroke="#888888"
                       fontSize={12}
                       tickLine={false}
@@ -421,7 +426,7 @@ export default function TopicDetail() {
                       }}
                       itemStyle={{ color: "hsl(var(--foreground))" }}
                       labelFormatter={(label) =>
-                        format(new Date(label), "PP p")
+                        dayjs(label).format("MMM D, YYYY h:mm A")
                       }
                     />
                     <Bar
@@ -449,7 +454,7 @@ export default function TopicDetail() {
                   <BarChart data={chartData}>
                     <XAxis
                       dataKey="end"
-                      tickFormatter={(val) => format(new Date(val), "MMM d")}
+                      tickFormatter={(val) => dayjs(val).format("MMM D")}
                       stroke="#888888"
                       fontSize={12}
                       tickLine={false}
@@ -475,7 +480,7 @@ export default function TopicDetail() {
                       }}
                       itemStyle={{ color: "hsl(var(--foreground))" }}
                       labelFormatter={(label) =>
-                        format(new Date(label), "PP p")
+                        dayjs(label).format("MMM D, YYYY h:mm A")
                       }
                     />
                     <Bar
@@ -505,7 +510,7 @@ export default function TopicDetail() {
                   <LineChart data={chartData}>
                     <XAxis
                       dataKey="end"
-                      tickFormatter={(val) => format(new Date(val), "MMM d")}
+                      tickFormatter={(val) => dayjs(val).format("MMM D")}
                       stroke="#888888"
                       fontSize={12}
                       tickLine={false}
@@ -531,7 +536,7 @@ export default function TopicDetail() {
                       }}
                       itemStyle={{ color: "hsl(var(--foreground))" }}
                       labelFormatter={(label) =>
-                        format(new Date(label), "PP p")
+                        dayjs(label).format("MMM D, YYYY h:mm A")
                       }
                       formatter={(value: any) => [
                         `${getSentimentEmoji(Number(value))} ${Number(value).toFixed(2)}`,
@@ -565,8 +570,8 @@ export default function TopicDetail() {
                     <XAxis
                       dataKey="end"
                       type="number"
-                      domain={[rangeCutoff.getTime(), now.getTime()]}
-                      tickFormatter={(val) => format(new Date(val), "MMM d")}
+                      domain={[rangeCutoff.valueOf(), now.valueOf()]}
+                      tickFormatter={(val) => dayjs(val).format("MMM D")}
                       scale="time"
                       stroke="#888888"
                       fontSize={12}
@@ -592,7 +597,7 @@ export default function TopicDetail() {
                       }}
                       itemStyle={{ color: "hsl(var(--foreground))" }}
                       labelFormatter={(label) =>
-                        format(new Date(label), "PP p")
+                        dayjs(label).format("MMM D, YYYY h:mm A")
                       }
                       formatter={(value: any) => [
                         `${(Number(value) || 0).toFixed(2)}x`,
