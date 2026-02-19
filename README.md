@@ -37,6 +37,8 @@ There are 3 consumer groups:
 ### Spark Sentiment Analyzer (`Python`)
 
 After the ingestion of the matched posts of topics, Spark runs a sentiment analysis on them, and writes the enriched records into Kafka.
+For the sentiment analysis, Spark uses TextBlob, that is a Python library that offers sentiment analysis.
+**Note:** the use of TextBlob for this project prototype is intentional. TextBlob is very lightweight, and the choice of using Spark is not for TextBlob (because it would be overkill), but to guarantee the scalability of a future model for sentiment analysis. In a production scenario, TextBlob would be replaced by a more powerful model. At that point, the choice of using Spark would be justified.
 
 ### Logstash
 
