@@ -154,10 +154,11 @@ export default function TopicCreator({ onTopicCreated }: TopicCreatorProps) {
           />
 
           <div className="flex items-center justify-between">
+            {/** Surprise-me feature disabled since it's a little bit imprecise */}
             <Button
               size="sm"
               onClick={handleRandomPrompt}
-              className="gap-2 btn-glow border-0 text-white font-medium hover:opacity-90"
+              className="gap-2 btn-glow border-0 text-white font-medium hover:opacity-90 opacity-0"
             >
               <Sparkles className="h-4 w-4" />
               Surprise Me
