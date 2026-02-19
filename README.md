@@ -34,30 +34,37 @@ There are 3 consumer groups:
 - `enrich-matched-posts`: consumers (Spark executors) that enriches matched posts with sentiment attribute.
 - `forward-enriched-matched-posts`: consumers (Logstash) that forwards enriched matched posts to Elasticsearch.
 
+**Why it's used:**
+1.  **Handling high traffic for the processing layer**: It allows to the processing layer to process data at its own pace. This is more useful in a production scenario where we may want to take data from much more subreddits and more frequently, and use a more powerful sentiment analysis model, and in that case Spark cannot keep up with the data ingestion rate.
+2.  **Fault Tolerance**: In case the processing component, like Spark, Ingestion Service or Logstash, needs to be restarted or crashes, data is safely persisted in Kafka topics and can be processed later.
+
 ### Spark Sentiment Analyzer (`Python`)
 
 After the ingestion of the matched posts of topics, Spark runs a sentiment analysis on them, and writes the enriched records into Kafka.
 For the sentiment analysis, Spark uses TextBlob, that is a Python library that offers sentiment analysis.
 
-**Note:** the use of TextBlob for this project prototype is intentional. TextBlob is very lightweight, and the choice of using Spark is not for TextBlob (because it would be overkill), but to guarantee the scalability of a future model for sentiment analysis. In a production scenario, TextBlob would be replaced by a more powerful model. At that point, the choice of using Spark would be justified.
+**Why it's used:** the use of TextBlob for this project prototype is intentional, because it's very lightweight. The choice of using Spark is not for TextBlob (because it would be overkill), but to guarantee the scalability of a future model for sentiment analysis. In a production scenario, TextBlob would be replaced by a more powerful model. At that point, the choice of using Spark would be justified.
 
 ### Logstash
 
-It reads the enriched records from Kafka, add the field `@timestamp` based on the `timestamp` field, and forwards them to Elasticsearch.
+**Why it's used:**: it reads the enriched records from Kafka, add the field `@timestamp` based on the `timestamp` field, and forwards them to Elasticsearch.
+The field `@timestamp` is not added by the Ingestion Service because in case we want to store the data in another source we don't want to add the field `@timestamp` that would be useless.
 
 ### API & Dashboard
 
 The Express.js API uses MySQL to store the topics and it uses Elasticsearch to calculate metrics per time window (1 day, 7 days, 30 days). The metrics are then served to the front-end.
 
-### Kibana
+### Kibana & Elasticsearch
 
-It's used to visualize metrics from Elastisearch data.
+**Why they are used:**
+*   **Elasticsearch** it performs aggregations efficiently in a range of time.
+*   **Kibana** shows charts of topic metrics for a given time window, and it's useful to see metrics in real-time for debugging and testing.
 
 ## Tech Stack
 
 - **Front-end**: React, Shadcn UI.
 - **Back-end**: Node.js, Express.js, MySQL.
-- **DevOps**: Kafka, Spark, Elasticsearch, Logstash, Docker.
+- **DevOps**: Kafka, Spark, Elasticsearch, Logstash, Kibana, Docker.
 
 ## Getting Started
 
